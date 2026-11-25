@@ -7,6 +7,7 @@ import {
   type Affine2D,
 } from './math';
 import type {
+  Asset,
   Key,
   NodeEffects,
   Project,
@@ -31,10 +32,13 @@ export interface EvaluatedDrawItem {
   assetId: string;
   assetRevision: number;
   blobId: string;
+  assetWidth: number;
+  assetHeight: number;
   anchorX: number;
   anchorY: number;
   drawOrder: number;
   opacity: number;
+  locked: boolean;
   worldMatrix: Affine2D;
   effects: NodeEffects;
   tile?: TileParams;
@@ -166,6 +170,21 @@ function topologicalOrder(nodes: Record<string, SceneNode>): SceneNode[] {
   return ordered;
 }
 
+function resolveAssetBlobId(project: Project, asset: Asset): string {
+  if (asset.kind === 'synthetic-rgba') {
+    return asset.blobId;
+  }
+  const source = project.sources[asset.sourceId];
+  if (!source) {
+    throw new AppError(
+      'ERR_MISSING_ASSET',
+      `Cutout asset "${asset.id}" references missing source "${asset.sourceId}".`,
+      { assetId: asset.id, sourceId: asset.sourceId },
+    );
+  }
+  return source.blobId;
+}
+
 export function evaluateScene(
   project: Project,
   shotTick: number,
@@ -274,6 +293,8 @@ export function evaluateScene(
       );
     }
 
+    const blobId = resolveAssetBlobId(project, asset);
+
     if (!visible || opacity <= 0) {
       continue;
     }
@@ -346,11 +367,14 @@ export function evaluateScene(
       kind: node.kind,
       assetId: asset.id,
       assetRevision: asset.revision,
-      blobId: asset.blobId,
+      blobId,
+      assetWidth: asset.width,
+      assetHeight: asset.height,
       anchorX: asset.anchorX,
       anchorY: asset.anchorY,
       drawOrder,
       opacity,
+      locked: node.locked,
       worldMatrix,
       effects,
       ...(evaluatedTile ? { tile: evaluatedTile } : {}),

@@ -27,7 +27,7 @@ describe('persistence/zip archive', () => {
     expect(restored.blobs.size).toBe(blobs.size);
     for (const [id, orig] of blobs.entries()) {
       const got = restored.blobs.get(id)!;
-      expect(Buffer.compare(Buffer.from(got.pngBytes), Buffer.from(orig.pngBytes))).toBe(0);
+      expect(Buffer.compare(Buffer.from(got.bytes), Buffer.from(orig.bytes))).toBe(0);
     }
   });
 

@@ -1,10 +1,19 @@
+import type { HistoryStats } from '../application/history';
 import { ProjectStore, type ReplayLog, type ReplayReport } from '../application/store';
+import { decodeImageInBrowser } from '../assets/sourceImport';
 import type { Command } from '../domain/commands';
 import type { EvaluatedScene } from '../domain/evaluator';
-import type { Project } from '../domain/schema';
+import { sha256Hex } from '../domain/hash';
+import { hitTestScene } from '../domain/hitTest';
+import type { Project, SourceRecord } from '../domain/schema';
 import { probeExportCapabilities } from '../export/capabilities';
 import { exportProjectRange } from '../export/pipeline';
 import type { CapabilityReport, ExportOptions } from '../export/types';
+import {
+  IndexedDbRecoveryStorage,
+  RecoveryManager,
+  type RecoveryInfo,
+} from '../persistence/recovery';
 import { packArchive, unpackArchive } from '../persistence/zip';
 import { probeWebGlCapabilities } from '../render/capabilities';
 import { PixiStageRenderer, type RenderOptions, type ResourceCounters } from '../render/pixiAdapter';
@@ -36,51 +45,54 @@ export interface StudioHarness {
   loadFixture(id: string): Promise<void>;
   loadArchive(bytes: number[]): Promise<void>;
   packCurrentArchive(): Promise<number[]>;
+  importSource(
+    name: string,
+    bytes: number[],
+    options?: { createInitialAsset?: boolean },
+  ): Promise<{ source: SourceRecord; assetId?: string; deduplicated: boolean }>;
   dispatch(command: Command): Promise<Project>;
+  undo(): Promise<Project | null>;
+  redo(): Promise<Project | null>;
+  historyStats(): HistoryStats;
+  isDirty(): boolean;
+  markSaved(): void;
   snapshot(): Project;
   evaluate(tick: number): EvaluatedScene;
+  hitTest(tick: number, x: number, y: number, includeLocked?: boolean): string | null;
   render(tick: number, options?: RenderOptions): Promise<FrameArtifactDto>;
   exportRange(
     options: Omit<ExportOptions, 'signal' | 'onProgress'> & { abortAfterFrames?: number },
   ): Promise<ExportArtifactDto>;
   replay(log: ReplayLog): Promise<ReplayReport>;
   resources(): ResourceCounters;
+  clearTextures(): void;
   probeCapabilities(): Promise<CapabilityReport>;
+  saveRecovery(): Promise<RecoveryInfo>;
+  inspectRecovery(): Promise<RecoveryInfo | null>;
+  recoverFromStorage(): Promise<Project>;
+  discardRecovery(): Promise<void>;
   dispose(): void;
-}
-
-async function decodePngInBrowser(
-  pngBytes: Uint8Array,
-): Promise<{ width: number; height: number; rgba: Uint8Array }> {
-  const copy = new Uint8Array(pngBytes.byteLength);
-  copy.set(pngBytes);
-  const blob = new Blob([copy.buffer], { type: 'image/png' });
-  const bitmap = await createImageBitmap(blob);
-  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-  const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(bitmap, 0, 0);
-  const imgData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
-  bitmap.close();
-  return {
-    width: imgData.width,
-    height: imgData.height,
-    rgba: new Uint8Array(imgData.data.buffer),
-  };
 }
 
 export function createStudioHarness(): StudioHarness {
   const store = new ProjectStore();
   const renderer = new PixiStageRenderer();
+  const recovery = new RecoveryManager(new IndexedDbRecoveryStorage());
 
   return {
     async loadFixture(id: string): Promise<void> {
       const fixture = loadFixtureById(id);
+      for (const blob of fixture.blobs.values()) {
+        blob.sha256 = await sha256Hex(blob.bytes);
+      }
+      renderer.clearTextures();
       store.load(fixture.project, fixture.blobs);
     },
 
     async loadArchive(bytes: number[]): Promise<void> {
-      const unpacked = await unpackArchive(new Uint8Array(bytes), decodePngInBrowser);
-      store.load(unpacked.project, unpacked.blobs);
+      const unpacked = await unpackArchive(new Uint8Array(bytes), decodeImageInBrowser);
+      renderer.clearTextures();
+      store.replaceProjectTransactional(unpacked.project, unpacked.blobs);
     },
 
     async packCurrentArchive(): Promise<number[]> {
@@ -88,8 +100,42 @@ export function createStudioHarness(): StudioHarness {
       return Array.from(packed);
     },
 
+    async importSource(name: string, bytes: number[], options?: { createInitialAsset?: boolean }) {
+      const raw = new Uint8Array(bytes);
+      const decoded = await decodeImageInBrowser(raw);
+      return store.importSource({
+        name,
+        bytes: raw,
+        mimeType: decoded.mimeType,
+        width: decoded.width,
+        height: decoded.height,
+        rgba: decoded.rgba,
+        createInitialAsset: options?.createInitialAsset ?? true,
+      });
+    },
+
     async dispatch(command: Command): Promise<Project> {
       return store.dispatch(command);
+    },
+
+    async undo(): Promise<Project | null> {
+      return store.undo();
+    },
+
+    async redo(): Promise<Project | null> {
+      return store.redo();
+    },
+
+    historyStats(): HistoryStats {
+      return store.historyStats();
+    },
+
+    isDirty(): boolean {
+      return store.isDirty();
+    },
+
+    markSaved(): void {
+      store.markSaved();
     },
 
     snapshot(): Project {
@@ -98,6 +144,21 @@ export function createStudioHarness(): StudioHarness {
 
     evaluate(tick: number): EvaluatedScene {
       return store.evaluate(tick);
+    },
+
+    hitTest(tick: number, x: number, y: number, includeLocked = false): string | null {
+      const scene = store.evaluate(tick);
+      const blobs = store.getBlobs();
+      return hitTestScene(scene, { x, y }, {
+        includeLocked,
+        getAlphaAt(blobId, px, py) {
+          const blob = blobs.get(blobId);
+          if (!blob || px < 0 || py < 0 || px >= blob.width || py >= blob.height) {
+            return 0;
+          }
+          return blob.rgba[(py * blob.width + px) * 4 + 3] ?? 0;
+        },
+      });
     },
 
     async render(tick: number, options?: RenderOptions): Promise<FrameArtifactDto> {
@@ -150,8 +211,31 @@ export function createStudioHarness(): StudioHarness {
       return renderer.getResourceCounters();
     },
 
+    clearTextures(): void {
+      renderer.clearTextures();
+    },
+
     async probeCapabilities(): Promise<CapabilityReport> {
       return probeExportCapabilities(probeWebGlCapabilities());
+    },
+
+    async saveRecovery(): Promise<RecoveryInfo> {
+      return recovery.saveSnapshot(store.snapshot(), store.getBlobs());
+    },
+
+    async inspectRecovery(): Promise<RecoveryInfo | null> {
+      return recovery.inspect();
+    },
+
+    async recoverFromStorage(): Promise<Project> {
+      const restored = await recovery.recover(decodeImageInBrowser);
+      renderer.clearTextures();
+      store.replaceProjectTransactional(restored.project, restored.blobs);
+      return store.snapshot();
+    },
+
+    async discardRecovery(): Promise<void> {
+      await recovery.discard();
     },
 
     dispose(): void {

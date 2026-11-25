@@ -14,14 +14,37 @@ import {
 import { encodePngRgba } from '../assets/pngCodec';
 import { AppError } from '../domain/errors';
 import type { EvaluatedDrawItem, EvaluatedScene } from '../domain/evaluator';
+import { applyAffineToPoint, invertAffine, type Affine2D, type Point2D } from '../domain/math';
 import type { NodeEffects } from '../domain/schema';
 import { positiveMod } from '../domain/time';
 import type { BlobRecord } from '../persistence/zip';
+
+export interface EditorViewport {
+  panX: number;
+  panY: number;
+  zoom: number;
+}
 
 export interface RenderOptions {
   outputWidth?: number;
   outputHeight?: number;
   transparentBackground?: boolean;
+  viewport?: EditorViewport;
+  showGuides?: boolean;
+  selectedNodeId?: string | null;
+}
+
+export function canvasPointToStage(
+  cx: number,
+  cy: number,
+  outW: number,
+  outH: number,
+  viewport: EditorViewport,
+  stageToOutput: Affine2D,
+): Point2D {
+  const ox = (cx - outW / 2 - viewport.panX) / viewport.zoom + outW / 2;
+  const oy = (cy - outH / 2 - viewport.panY) / viewport.zoom + outH / 2;
+  return applyAffineToPoint(invertAffine(stageToOutput), { x: ox, y: oy });
 }
 
 export interface ResourceCounters {
@@ -312,6 +335,16 @@ export class PixiStageRenderer {
     const root = new Container();
     const createdFilters: Filter[] = [];
 
+    const vp = options.viewport;
+    const viewportContainer = new Container();
+    if (vp) {
+      const z = vp.zoom;
+      const vTx = outW / 2 + vp.panX - (outW / 2) * z;
+      const vTy = outH / 2 + vp.panY - (outH / 2) * z;
+      viewportContainer.setFromMatrix(new Matrix(z, 0, 0, z, vTx, vTy));
+    }
+    root.addChild(viewportContainer);
+
     const transparent = options.transparentBackground ?? scene.background.alpha === 0;
     if (!transparent && scene.background.alpha > 0) {
       const bg = new Graphics();
@@ -319,13 +352,13 @@ export class PixiStageRenderer {
         color: parseHexColor(scene.background.color),
         alpha: scene.background.alpha,
       });
-      root.addChild(bg);
+      viewportContainer.addChild(bg);
     }
 
     const cameraContainer = new Container();
     const camM = scene.camera.stageToOutput;
     cameraContainer.setFromMatrix(new Matrix(camM.a, camM.b, camM.c, camM.d, camM.tx, camM.ty));
-    root.addChild(cameraContainer);
+    viewportContainer.addChild(cameraContainer);
 
     for (const item of scene.drawList) {
       const obj = this.buildDisplayObject(
@@ -336,6 +369,35 @@ export class PixiStageRenderer {
         createdFilters,
       );
       cameraContainer.addChild(obj);
+    }
+
+    if (options.showGuides) {
+      const guides = new Graphics();
+      guides
+        .rect(0, 0, scene.shotWidth, scene.shotHeight)
+        .stroke({ color: 0x5c7cfa, width: 1.5, alpha: 0.75 });
+
+      if (options.selectedNodeId) {
+        const sel = scene.drawList.find((d) => d.nodeId === options.selectedNodeId);
+        if (sel) {
+          const w = sel.kind === 'tile' && sel.tile ? sel.tile.width : sel.assetWidth;
+          const h = sel.kind === 'tile' && sel.tile ? sel.tile.height : sel.assetHeight;
+          const corners = [
+            applyAffineToPoint(sel.worldMatrix, { x: -sel.anchorX, y: -sel.anchorY }),
+            applyAffineToPoint(sel.worldMatrix, { x: w - sel.anchorX, y: -sel.anchorY }),
+            applyAffineToPoint(sel.worldMatrix, { x: w - sel.anchorX, y: h - sel.anchorY }),
+            applyAffineToPoint(sel.worldMatrix, { x: -sel.anchorX, y: h - sel.anchorY }),
+          ];
+          guides
+            .moveTo(corners[0]!.x, corners[0]!.y)
+            .lineTo(corners[1]!.x, corners[1]!.y)
+            .lineTo(corners[2]!.x, corners[2]!.y)
+            .lineTo(corners[3]!.x, corners[3]!.y)
+            .closePath()
+            .stroke({ color: 0x22d3ee, width: 2, alpha: 0.95 });
+        }
+      }
+      cameraContainer.addChild(guides);
     }
 
     this.activeFilterCount = createdFilters.length;
@@ -406,7 +468,7 @@ export class PixiStageRenderer {
     return { width, height, pngBytes, rgba };
   }
 
-  public dispose(): void {
+  public clearTextures(): void {
     for (const tex of this.baseTextures.values()) {
       tex.destroy(true);
     }
@@ -415,6 +477,10 @@ export class PixiStageRenderer {
       tex.destroy(true);
     }
     this.mirroredTextures.clear();
+  }
+
+  public dispose(): void {
+    this.clearTextures();
     if (this.renderer) {
       this.renderer.destroy();
       this.renderer = null;

@@ -1,16 +1,19 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { z } from 'zod';
+import { collectProjectBlobIds, type BlobRecord, type BlobRole } from '../application/blobStore';
+import { detectImageMime, mimeToExtension } from '../assets/sourceImport';
 import { AppError } from '../domain/errors';
-import { canonicalStringify, validateProject, type Project } from '../domain/schema';
+import { evaluateScene } from '../domain/evaluator';
+import { sha256Hex } from '../domain/hash';
+import {
+  SourceMimeTypeSchema,
+  canonicalStringify,
+  validateProject,
+  type Project,
+  type SourceMimeType,
+} from '../domain/schema';
 
-export interface BlobRecord {
-  id: string;
-  mimeType: string;
-  width: number;
-  height: number;
-  rgba: Uint8Array;
-  pngBytes: Uint8Array;
-}
+export type { BlobRecord, BlobRole };
 
 export interface UnpackOptions {
   maxEntries?: number;
@@ -22,6 +25,7 @@ const DEFAULT_MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024; // 1 GiB
 
 const ManifestBlobEntrySchema = z.object({
   id: z.string().min(1),
+  role: z.enum(['source', 'mask', 'overlay', 'asset']).default('asset'),
   path: z.string().min(1),
   byteLength: z.number().int().nonnegative(),
   mimeType: z.string().min(1),
@@ -32,23 +36,13 @@ const ManifestBlobEntrySchema = z.object({
 
 const ManifestSchema = z.object({
   kind: z.literal('terrymator-project'),
-  formatVersion: z.literal(1),
+  formatVersion: z.number().int().positive(),
   appVersion: z.string().min(1),
   projectPath: z.literal('project.json'),
   blobs: z.array(ManifestBlobEntrySchema),
 });
 
-export async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', copy.buffer);
-  const view = new Uint8Array(digest);
-  let hex = '';
-  for (const b of view) {
-    hex += b.toString(16).padStart(2, '0');
-  }
-  return hex;
-}
+export { sha256Hex };
 
 export function validateArchivePath(path: string): void {
   if (
@@ -69,6 +63,21 @@ export function validateArchivePath(path: string): void {
   }
 }
 
+function archivePathForBlob(rec: BlobRecord): string {
+  if (rec.role === 'source') {
+    const parsedMime = SourceMimeTypeSchema.safeParse(rec.mimeType);
+    const ext = parsedMime.success ? mimeToExtension(parsedMime.data) : 'bin';
+    return `sources/${rec.id}.${ext}`;
+  }
+  if (rec.role === 'mask') {
+    return `masks/${rec.id}.png`;
+  }
+  if (rec.role === 'overlay') {
+    return `overlays/${rec.id}.png`;
+  }
+  return `assets/${rec.id}.png`;
+}
+
 export async function packArchive(
   project: Project,
   blobs: Map<string, BlobRecord>,
@@ -76,17 +85,24 @@ export async function packArchive(
 ): Promise<Uint8Array> {
   const files: Record<string, Uint8Array> = {};
   const blobManifest: z.infer<typeof ManifestBlobEntrySchema>[] = [];
+  const referencedIds = collectProjectBlobIds(project);
 
-  for (const blobId of Array.from(blobs.keys()).sort()) {
-    const rec = blobs.get(blobId)!;
-    const path = `assets/${blobId}.png`;
+  for (const blobId of Array.from(referencedIds).sort()) {
+    const rec = blobs.get(blobId);
+    if (!rec) {
+      throw new AppError('ERR_MISSING_ASSET', `Cannot pack archive: missing blob "${blobId}".`, {
+        blobId,
+      });
+    }
+    const path = archivePathForBlob(rec);
     validateArchivePath(path);
-    const sha256 = await sha256Hex(rec.pngBytes);
-    files[path] = rec.pngBytes;
+    const sha256 = await sha256Hex(rec.bytes);
+    files[path] = rec.bytes;
     blobManifest.push({
       id: blobId,
+      role: rec.role,
       path,
-      byteLength: rec.pngBytes.byteLength,
+      byteLength: rec.bytes.byteLength,
       mimeType: rec.mimeType,
       sha256,
       width: rec.width,
@@ -94,12 +110,10 @@ export async function packArchive(
     });
   }
 
-  const projectBytes = strToU8(canonicalStringify(project));
-  files['project.json'] = projectBytes;
-
+  files['project.json'] = strToU8(canonicalStringify(project));
   const manifest = {
     kind: 'terrymator-project' as const,
-    formatVersion: 1 as const,
+    formatVersion: 1,
     appVersion,
     projectPath: 'project.json' as const,
     blobs: blobManifest,
@@ -111,7 +125,10 @@ export async function packArchive(
 
 export async function unpackArchive(
   zipBytes: Uint8Array,
-  decodePng: (pngBytes: Uint8Array) => Promise<{ width: number; height: number; rgba: Uint8Array }>,
+  decodeImage: (
+    bytes: Uint8Array,
+    mimeType: SourceMimeType,
+  ) => Promise<{ width: number; height: number; rgba: Uint8Array }>,
   options: UnpackOptions = {},
 ): Promise<{ project: Project; blobs: Map<string, BlobRecord> }> {
   const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
@@ -163,6 +180,13 @@ export async function unpackArchive(
       parsedManifest.error.issues[0]?.message ?? 'Invalid manifest schema.',
     );
   }
+  if (parsedManifest.data.formatVersion > 1) {
+    throw new AppError(
+      'ERR_UNSUPPORTED_VERSION',
+      `Unsupported archive formatVersion: ${parsedManifest.data.formatVersion}.`,
+      { formatVersion: parsedManifest.data.formatVersion },
+    );
+  }
 
   const projectRaw = entries[parsedManifest.data.projectPath];
   if (!projectRaw) {
@@ -190,22 +214,34 @@ export async function unpackArchive(
     if (actualHash !== entry.sha256) {
       throw new AppError('ERR_ARCHIVE_INVALID', `SHA-256 hash mismatch for blob "${entry.id}".`);
     }
-    const decoded = await decodePng(bytes);
+
+    const detectedMime = detectImageMime(bytes);
+    if (!detectedMime) {
+      throw new AppError('ERR_INVALID_IMAGE', `Blob "${entry.id}" is not a valid PNG/JPEG/WebP.`);
+    }
+
+    const decoded = await decodeImage(bytes, detectedMime);
     blobs.set(entry.id, {
       id: entry.id,
-      mimeType: entry.mimeType,
+      role: entry.role,
+      mimeType: detectedMime,
+      bytes,
+      sha256: actualHash,
       width: decoded.width,
       height: decoded.height,
       rgba: decoded.rgba,
-      pngBytes: bytes,
     });
   }
 
-  for (const asset of Object.values(project.assets)) {
-    if (!blobs.has(asset.blobId)) {
-      throw new AppError('ERR_MISSING_ASSET', `Project references missing blob "${asset.blobId}".`);
+  // Validate all project references & topological graph before returning
+  for (const blobId of collectProjectBlobIds(project)) {
+    if (!blobs.has(blobId)) {
+      throw new AppError('ERR_MISSING_ASSET', `Project references missing blob "${blobId}".`, {
+        blobId,
+      });
     }
   }
+  evaluateScene(project, 0);
 
   return { project, blobs };
 }

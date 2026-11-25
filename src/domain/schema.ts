@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { AppError } from './errors';
+import { createId } from './ids';
+import { TICKS_PER_SECOND, type RationalFps } from './time';
 
 const finiteNumber = z.number().finite();
 
@@ -79,7 +81,21 @@ export const NodeSchema = z.object({
   tile: TileParamsSchema.optional(),
 });
 
-export const AssetSchema = z.object({
+export const SourceMimeTypeSchema = z.enum(['image/png', 'image/jpeg', 'image/webp']);
+
+export const SourceSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  blobId: z.string().min(1),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  mimeType: SourceMimeTypeSchema,
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  attribution: z.string().optional(),
+  sourceUrl: z.string().optional(),
+});
+
+export const SyntheticAssetSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   kind: z.literal('synthetic-rgba'),
@@ -90,6 +106,31 @@ export const AssetSchema = z.object({
   blobId: z.string().min(1),
   revision: z.number().int().positive(),
 });
+
+export const CutoutAssetSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  kind: z.literal('cutout'),
+  sourceId: z.string().min(1),
+  editRect: z.object({
+    x: z.number().int(),
+    y: z.number().int(),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+  }),
+  maskBlobId: z.string().min(1).nullable(),
+  overlayBlobId: z.string().min(1).nullable(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  anchorX: finiteNumber,
+  anchorY: finiteNumber,
+  revision: z.number().int().positive(),
+});
+
+export const AssetSchema = z.discriminatedUnion('kind', [
+  SyntheticAssetSchema,
+  CutoutAssetSchema,
+]);
 
 export const InterpolationSchema = z.enum(['hold', 'linear', 'smooth']);
 
@@ -154,6 +195,7 @@ export const ProjectSchema = z.object({
   name: z.string().min(1),
   revision: z.number().int().positive(),
   shot: ShotSchema,
+  sources: z.record(z.string(), SourceSchema).default({}),
   assets: z.record(z.string(), AssetSchema),
   nodes: z.record(z.string(), NodeSchema),
   tracks: z.record(z.string(), TrackSchema),
@@ -164,7 +206,11 @@ export type TransformType = z.infer<typeof TransformSchema>;
 export type NodeEffects = z.infer<typeof NodeEffectsSchema>;
 export type TileParams = z.infer<typeof TileParamsSchema>;
 export type SceneNode = z.infer<typeof NodeSchema>;
-export type SyntheticAsset = z.infer<typeof AssetSchema>;
+export type SourceMimeType = z.infer<typeof SourceMimeTypeSchema>;
+export type SourceRecord = z.infer<typeof SourceSchema>;
+export type SyntheticAsset = z.infer<typeof SyntheticAssetSchema>;
+export type CutoutAsset = z.infer<typeof CutoutAssetSchema>;
+export type Asset = z.infer<typeof AssetSchema>;
 export type Interpolation = z.infer<typeof InterpolationSchema>;
 export type Key = z.infer<typeof KeySchema>;
 export type TrackProperty = z.infer<typeof TrackPropertySchema>;
@@ -199,10 +245,63 @@ export function defaultEffects(): NodeEffects {
   };
 }
 
+export function createBlankProject(options?: {
+  id?: string;
+  name?: string;
+  width?: number;
+  height?: number;
+  fps?: RationalFps;
+  durationTicks?: number;
+  background?: { color: string; alpha: number };
+}): Project {
+  const width = options?.width ?? 1280;
+  const height = options?.height ?? 720;
+  const fps = options?.fps ?? { num: 24, den: 1 };
+  const durationTicks = options?.durationTicks ?? TICKS_PER_SECOND * 10;
+  const background = options?.background ?? { color: '#1b1f2a', alpha: 1 };
+
+  return {
+    schemaVersion: 1,
+    id: options?.id ?? createId('proj'),
+    name: options?.name ?? 'Untitled Shot',
+    revision: 1,
+    shot: {
+      width,
+      height,
+      fps,
+      durationTicks,
+      defaultMotionRate: { num: 12, den: 1 },
+      background,
+      camera: { x: width / 2, y: height / 2, zoom: 1 },
+      globalShadowAngle: 45,
+    },
+    sources: {},
+    assets: {},
+    nodes: {},
+    tracks: {},
+  };
+}
+
 export function validateProject(input: unknown): Project {
+  if (
+    input !== null &&
+    typeof input === 'object' &&
+    'schemaVersion' in input &&
+    typeof (input as { schemaVersion: unknown }).schemaVersion === 'number' &&
+    (input as { schemaVersion: number }).schemaVersion > 1
+  ) {
+    throw new AppError(
+      'ERR_UNSUPPORTED_VERSION',
+      `Unsupported future project schemaVersion: ${(input as { schemaVersion: number }).schemaVersion}.`,
+      { schemaVersion: (input as { schemaVersion: number }).schemaVersion },
+    );
+  }
   const parsed = ProjectSchema.safeParse(input);
   if (!parsed.success) {
-    throw new AppError('ERR_INVALID_SCHEMA', parsed.error.issues[0]?.message ?? 'Invalid project schema.');
+    throw new AppError(
+      'ERR_INVALID_SCHEMA',
+      parsed.error.issues[0]?.message ?? 'Invalid project schema.',
+    );
   }
   return parsed.data;
 }

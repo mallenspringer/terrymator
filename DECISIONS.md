@@ -31,3 +31,16 @@ All runtime and test dependencies are pinned to exact versions in `package.json`
 ### 6. Production Bundle Isolation
 - `__ENABLE_TEST_HARNESS__` is `true` only during `vite` dev server (or `VITE_ENABLE_TEST_HARNESS=1`) and `false` during `vite build`.
 - `src/main.tsx` dynamically imports `src/test-harness/harness.ts` only inside `if (__ENABLE_TEST_HARNESS__)`, and `scripts/verify-prod-bundle.mjs` verifies `dist/` contains no harness symbols or unexpected external URLs.
+
+## 2026-11-25 — Gate G1
+
+### 7. Content-Addressed Source Deduplication & Undo Blob Retention
+- `BlobStore.putSource()` hashes raw imported bytes with SHA-256 (`src/domain/hash.ts`) and reuses any existing `'source'` blob with the same digest, avoiding redundant storage when the same image is imported twice.
+- `ProjectStore.pruneOrphanedBlobs()` retains all blobs referenced by the active project **and** any snapshot in `UndoHistory` (`undoStack` + `redoStack`), releasing blobs only when evicted from history or on project switch / `NEW_SHOT`.
+
+### 8. Generational IndexedDB Crash Recovery
+- `RecoveryManager` writes referenced blobs and the new `RecoveryGeneration` record *before* updating `meta.activeGenId`, so any simulated or real write/quota failure leaves the previous valid generation intact.
+- `App.tsx` surfaces an explicit `Recover` / `Discard` banner on startup when a recovery snapshot exists, and debounces recovery saves (250ms) after committed dirty edits.
+
+### 9. Strict React 19 Hook Purity
+- `eslint-plugin-react-hooks@7.1.1` enforces `react-hooks/refs`; long-lived controller instances (`ProjectStore`, `PixiStageRenderer`, `RecoveryManager`) are initialized via `useState(() => ...)` lazy initializers rather than reading `useRef.current` during render.

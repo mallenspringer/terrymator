@@ -16,13 +16,16 @@ function makeBlob(
   id: string,
   img: { width: number; height: number; rgba: Uint8Array },
 ): BlobRecord {
+  const pngBytes = encodePngRgba(img.rgba, img.width, img.height);
   return {
     id,
+    role: 'asset',
     mimeType: 'image/png',
+    bytes: pngBytes,
+    sha256: '0'.repeat(64),
     width: img.width,
     height: img.height,
     rgba: img.rgba,
-    pngBytes: encodePngRgba(img.rgba, img.width, img.height),
   };
 }
 
@@ -88,6 +91,7 @@ export function buildG0DemoFixture(): LoadedFixture {
       camera: { x: 160, y: 90, zoom: 1 },
       globalShadowAngle: 45,
     },
+    sources: {},
     assets: {
       'asset-tile': {
         id: 'asset-tile',
@@ -285,6 +289,7 @@ export function buildF09ExportClockFixture(): LoadedFixture {
       camera: { x: 160, y: 90, zoom: 1 },
       globalShadowAngle: 45,
     },
+    sources: {},
     assets: {
       'asset-yellow': {
         id: 'asset-yellow',

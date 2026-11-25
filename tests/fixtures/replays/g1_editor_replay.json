@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "G0_DEMO",
+  "commands": [
+    {
+      "type": "DUPLICATE_NODE",
+      "sourceNodeId": "hand",
+      "newNodeId": "hand-dup",
+      "newName": "Hand Dup",
+      "offsetX": 12,
+      "offsetY": 12
+    },
+    {
+      "type": "MAKE_ASSET_UNIQUE",
+      "nodeId": "hand-dup",
+      "newAssetId": "asset-hand-unique",
+      "newName": "Hand Unique"
+    },
+    {
+      "type": "SET_NODE_DRAW_ORDER",
+      "nodeId": "hand-dup",
+      "drawOrder": 35
+    },
+    {
+      "type": "SET_NODE_PARENT",
+      "nodeId": "hand-dup",
+      "parentId": "rig-root"
+    }
+  ],
+  "checkpoints": [
+    {
+      "tick": 0,
+      "expectedDrawOrderNodeIds": ["tile-bg", "arm", "torso", "hand", "hand-dup", "fx-badge"]
+    }
+  ]
+}

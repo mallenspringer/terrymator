@@ -7,7 +7,13 @@ if (!fs.existsSync(distDir)) {
   process.exit(1);
 }
 
-const forbiddenTokens = ['__TERRYMATOR_HARNESS__', 'mountHarness', 'StudioHarness'];
+const forbiddenTokens = [
+  '__TERRYMATOR_HARNESS__',
+  'mountHarness',
+  'StudioHarness',
+  'G0_DEMO',
+  'F09_EXPORT_CLOCK',
+];
 const allowedUrlPrefixes = [
   'http://www.w3.org/',
   'https://www.w3.org/',
