@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "G0_DEMO",
+  "commands": [
+    {
+      "type": "SET_NODE_DRAW_ORDER",
+      "nodeId": "arm",
+      "drawOrder": 25
+    },
+    {
+      "type": "SET_CAMERA",
+      "x": 180,
+      "y": 90,
+      "zoom": 1.25
+    },
+    {
+      "type": "UPSERT_KEY",
+      "trackId": "trk-arm-angle",
+      "targetKind": "node",
+      "targetId": "arm",
+      "property": "transform.angle",
+      "tick": 120000,
+      "value": 180,
+      "interpolation": "hold"
+    }
+  ],
+  "checkpoints": [
+    {
+      "tick": 60000,
+      "expectedDrawOrderNodeIds": ["tile-bg", "torso", "arm", "hand", "fx-badge"]
+    }
+  ]
+}

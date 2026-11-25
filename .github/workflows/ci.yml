@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Check ffmpeg/ffprobe availability
+        run: |
+          which ffmpeg ffprobe || true
+          ffmpeg -version | head -n 2 || true
+
+      - name: Run full verification
+        run: npm run verify
+
+      - name: Upload test artifacts on failure or completion
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-artifacts
+          path: |
+            artifacts/
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
