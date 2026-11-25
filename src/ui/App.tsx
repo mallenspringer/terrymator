@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { ProjectStore } from '../application/store';
 import { decodeImageInBrowser } from '../assets/sourceImport';
-import { collectSubtreeNodeIds, createDefaultNode } from '../domain/commands';
+import { collectSubtreeNodeIds, createDefaultNode, type Command } from '../domain/commands';
 import { isAppError } from '../domain/errors';
+import { evaluateScene } from '../domain/evaluator';
 import { createId } from '../domain/ids';
 import {
   createBlankProject,
@@ -12,8 +13,10 @@ import {
   type MaterialRecipe,
   type Project,
   type TileParams,
+  type TrackProperty,
   type TransformType,
 } from '../domain/schema';
+import { TICKS_PER_SECOND, frameIndexToTick } from '../domain/time';
 import { packAssetPackage, unpackAssetPackage } from '../persistence/assetPackage';
 import { downloadBytes, readFileAsUint8Array } from '../persistence/fileIO';
 import {
@@ -25,9 +28,18 @@ import { packArchive, unpackArchive } from '../persistence/zip';
 import { PixiStageRenderer, type EditorViewport } from '../render/pixiAdapter';
 import { AssetLibraryPanel } from './AssetLibraryPanel';
 import { CuttingRoomWorkspace } from './CuttingRoomWorkspace';
+import {
+  applyDraftsToPreviewProject,
+  draftsToUpsertCommands,
+  findTrack,
+  hasExistingTrack,
+  upsertPendingDraft,
+  type PendingDraft,
+} from './draftState';
 import { LayersInspectorPanel } from './LayersInspectorPanel';
 import { MaterialWorkshopWorkspace } from './MaterialWorkshopWorkspace';
 import { StageViewport } from './StageViewport';
+import { TimelinePanel } from './TimelinePanel';
 import './styles.css';
 
 type WorkspaceMode = 'studio' | 'cutting' | 'material';
@@ -52,6 +64,11 @@ export function App() {
   const [activeMaterialId, setActiveMaterialId] = useState<string | null>(null);
   const [showWireframe, setShowWireframe] = useState<boolean>(false);
   const [viewport, setViewport] = useState<EditorViewport>({ panX: 0, panY: 0, zoom: 1 });
+  const [currentTick, setCurrentTick] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [loopPlayback, setLoopPlayback] = useState<boolean>(true);
+  const [autoKey, setAutoKey] = useState<boolean>(false);
+  const [pendingDrafts, setPendingDrafts] = useState<PendingDraft[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [recoveryInfo, setRecoveryInfo] = useState<RecoveryInfo | null>(null);
   const [confirmState, setConfirmState] = useState<{
@@ -101,6 +118,10 @@ export function App() {
   }, [renderer]);
 
   const handleSaveArchive = useCallback(async () => {
+    if (pendingDrafts.length > 0) {
+      setErrorMsg('ERR_PENDING_DRAFT: Key or discard pending timeline drafts before saving.');
+      return;
+    }
     try {
       setErrorMsg(null);
       const snap = store.snapshot();
@@ -111,7 +132,41 @@ export function App() {
     } catch (err) {
       setErrorMsg(isAppError(err) ? `${err.code}: ${err.message}` : String(err));
     }
-  }, [store]);
+  }, [pendingDrafts.length, store]);
+
+  // Wall-clock playback loop (never integrates transforms)
+  useEffect(() => {
+    if (!isPlaying) return;
+    const workRange = project.shot.workRange ?? {
+      inTick: 0,
+      outTick: project.shot.durationTicks,
+    };
+    const span = Math.max(1, workRange.outTick - workRange.inTick);
+    const startOffset =
+      currentTick >= workRange.inTick && currentTick < workRange.outTick
+        ? currentTick - workRange.inTick
+        : 0;
+    const startWallMs = performance.now() - (startOffset / TICKS_PER_SECOND) * 1000;
+
+    let rafId = 0;
+    const step = (now: number) => {
+      const elapsedTicks = Math.round(((now - startWallMs) / 1000) * TICKS_PER_SECOND);
+      if (loopPlayback) {
+        const wrapped = workRange.inTick + (elapsedTicks % span);
+        setCurrentTick(wrapped);
+        rafId = requestAnimationFrame(step);
+      } else if (workRange.inTick + elapsedTicks >= workRange.outTick) {
+        setCurrentTick(workRange.outTick - 1);
+        setIsPlaying(false);
+      } else {
+        setCurrentTick(workRange.inTick + elapsedTicks);
+        rafId = requestAnimationFrame(step);
+      }
+    };
+    rafId = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(rafId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, loopPlayback, project.shot.durationTicks, project.shot.workRange]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -304,11 +359,62 @@ export function App() {
   };
 
   const blobs = store.getBlobs();
-  const evaluatedScene = useMemo(
-    () => store.evaluate(0, { outputWidth: 680, outputHeight: 400 }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [project, store],
+  const previewProject = useMemo(
+    () => applyDraftsToPreviewProject(project, pendingDrafts),
+    [pendingDrafts, project],
   );
+  const evaluatedScene = useMemo(
+    () => evaluateScene(previewProject, currentTick, { outputWidth: 680, outputHeight: 400 }),
+    [currentTick, previewProject],
+  );
+
+  const guardNoPendingDrafts = (): boolean => {
+    if (pendingDrafts.length > 0) {
+      setErrorMsg('ERR_PENDING_DRAFT: Key or discard pending drafts before changing timeline time.');
+      return false;
+    }
+    return true;
+  };
+
+  const routePropertyEdit = (
+    targetKind: 'node' | 'camera',
+    targetId: string,
+    property: TrackProperty,
+    value: number | boolean,
+    fallbackCommand: Command,
+    coalesceKey?: string,
+  ) => {
+    runCommand(() => {
+      if (autoKey) {
+        const existing = findTrack(project, targetKind, targetId, property);
+        store.dispatch(
+          {
+            type: 'UPSERT_KEY',
+            trackId: existing?.id ?? `trk-${targetId}-${property}`,
+            targetKind,
+            targetId,
+            property,
+            tick: currentTick,
+            value,
+            interpolation: 'linear',
+          },
+          { label: `Key ${property}`, ...(coalesceKey ? { coalesceKey } : {}) },
+        );
+      } else if (hasExistingTrack(project, targetKind, targetId, property)) {
+        setPendingDrafts((prev) =>
+          upsertPendingDraft(prev, {
+            targetKind,
+            targetId,
+            property,
+            tick: currentTick,
+            value,
+          }),
+        );
+      } else {
+        store.dispatch(fallbackCommand, coalesceKey ? { coalesceKey } : {});
+      }
+    });
+  };
   const selectedNode = selectedNodeId ? (project.nodes[selectedNodeId] ?? null) : null;
   const cutouts = useMemo(
     () => Object.values(project.assets).filter((a): a is CutoutAsset => a.kind === 'cutout'),
@@ -504,7 +610,8 @@ export function App() {
       )}
 
       {workspace === 'studio' && (
-        <div className="studio-workspace">
+        <>
+          <div className="studio-workspace">
           <AssetLibraryPanel
             sources={Object.values(project.sources)}
             assets={Object.values(project.assets)}
@@ -628,10 +735,67 @@ export function App() {
             onSelectNode={setSelectedNodeId}
             onDragMoveNode={(nodeId, x, y, coalesceKey) =>
               runCommand(() => {
-                store.dispatch(
-                  { type: 'SET_NODE_TRANSFORM', nodeId, transform: { x, y } },
-                  { label: 'Move layer', coalesceKey },
-                );
+                if (autoKey) {
+                  const tx = findTrack(project, 'node', nodeId, 'transform.x');
+                  const ty = findTrack(project, 'node', nodeId, 'transform.y');
+                  store.dispatch(
+                    {
+                      type: 'UPSERT_KEY',
+                      trackId: tx?.id ?? `trk-${nodeId}-transform.x`,
+                      targetKind: 'node',
+                      targetId: nodeId,
+                      property: 'transform.x',
+                      tick: currentTick,
+                      value: x,
+                      interpolation: 'linear',
+                    },
+                    { coalesceKey: `${coalesceKey}-x` },
+                  );
+                  store.dispatch(
+                    {
+                      type: 'UPSERT_KEY',
+                      trackId: ty?.id ?? `trk-${nodeId}-transform.y`,
+                      targetKind: 'node',
+                      targetId: nodeId,
+                      property: 'transform.y',
+                      tick: currentTick,
+                      value: y,
+                      interpolation: 'linear',
+                    },
+                    { coalesceKey: `${coalesceKey}-y` },
+                  );
+                } else if (
+                  hasExistingTrack(project, 'node', nodeId, 'transform.x') ||
+                  hasExistingTrack(project, 'node', nodeId, 'transform.y')
+                ) {
+                  setPendingDrafts((prev) => {
+                    let next = prev;
+                    if (hasExistingTrack(project, 'node', nodeId, 'transform.x')) {
+                      next = upsertPendingDraft(next, {
+                        targetKind: 'node',
+                        targetId: nodeId,
+                        property: 'transform.x',
+                        tick: currentTick,
+                        value: x,
+                      });
+                    }
+                    if (hasExistingTrack(project, 'node', nodeId, 'transform.y')) {
+                      next = upsertPendingDraft(next, {
+                        targetKind: 'node',
+                        targetId: nodeId,
+                        property: 'transform.y',
+                        tick: currentTick,
+                        value: y,
+                      });
+                    }
+                    return next;
+                  });
+                } else {
+                  store.dispatch(
+                    { type: 'SET_NODE_TRANSFORM', nodeId, transform: { x, y } },
+                    { label: 'Move layer', coalesceKey },
+                  );
+                }
               })
             }
             onViewportChange={setViewport}
@@ -701,8 +865,10 @@ export function App() {
               })
             }
             onToggleVisible={(nodeId, visible) =>
-              runCommand(() => {
-                store.dispatch({ type: 'SET_NODE_VISIBILITY', nodeId, visible });
+              routePropertyEdit('node', nodeId, 'visible', visible, {
+                type: 'SET_NODE_VISIBILITY',
+                nodeId,
+                visible,
               })
             }
             onToggleLocked={(nodeId, locked) =>
@@ -711,15 +877,29 @@ export function App() {
               })
             }
             onChangeDrawOrder={(nodeId, drawOrder) =>
-              runCommand(() => {
-                store.dispatch({ type: 'SET_NODE_DRAW_ORDER', nodeId, drawOrder });
+              routePropertyEdit('node', nodeId, 'drawOrder', drawOrder, {
+                type: 'SET_NODE_DRAW_ORDER',
+                nodeId,
+                drawOrder,
               })
             }
-            onChangeTransform={(nodeId, patch: Partial<TransformType>) =>
-              runCommand(() => {
-                store.dispatch({ type: 'SET_NODE_TRANSFORM', nodeId, transform: patch });
-              })
-            }
+            onChangeTransform={(nodeId, patch: Partial<TransformType>) => {
+              const entries = Object.entries(patch) as Array<[keyof TransformType, number]>;
+              if (entries.length === 1) {
+                const [field, val] = entries[0]!;
+                routePropertyEdit(
+                  'node',
+                  nodeId,
+                  `transform.${field}` as TrackProperty,
+                  val,
+                  { type: 'SET_NODE_TRANSFORM', nodeId, transform: patch },
+                );
+              } else {
+                runCommand(() => {
+                  store.dispatch({ type: 'SET_NODE_TRANSFORM', nodeId, transform: patch });
+                });
+              }
+            }}
             onChangePivot={(nodeId, pivotX, pivotY, preserveWorld) =>
               runCommand(() => {
                 if (preserveWorld) {
@@ -739,8 +919,10 @@ export function App() {
               })
             }
             onChangeOpacity={(nodeId, opacity) =>
-              runCommand(() => {
-                store.dispatch({ type: 'SET_NODE_OPACITY', nodeId, opacity });
+              routePropertyEdit('node', nodeId, 'opacity', opacity, {
+                type: 'SET_NODE_OPACITY',
+                nodeId,
+                opacity,
               })
             }
             onChangeParent={(nodeId, parentId, preserveWorld) =>
@@ -756,16 +938,33 @@ export function App() {
                 }
               })
             }
+            onChangeSampling={(nodeId, samplingOverride) =>
+              runCommand(() => {
+                store.dispatch({ type: 'SET_NODE_SAMPLING', nodeId, samplingOverride });
+              })
+            }
             onChangeTileParams={(nodeId, patch: Partial<TileParams>) =>
               runCommand(() => {
                 store.dispatch({ type: 'SET_NODE_TILE_PARAMS', nodeId, tile: patch });
               })
             }
-            onChangeCamera={(patch) =>
-              runCommand(() => {
-                store.dispatch({ type: 'SET_CAMERA', ...patch });
-              })
-            }
+            onChangeCamera={(patch) => {
+              const entries = Object.entries(patch) as Array<['x' | 'y' | 'zoom', number]>;
+              if (entries.length === 1) {
+                const [field, val] = entries[0]!;
+                routePropertyEdit(
+                  'camera',
+                  'camera',
+                  `camera.${field}` as TrackProperty,
+                  val,
+                  { type: 'SET_CAMERA', ...patch },
+                );
+              } else {
+                runCommand(() => {
+                  store.dispatch({ type: 'SET_CAMERA', ...patch });
+                });
+              }
+            }}
             onRenameNode={(nodeId, name) =>
               runCommand(() => {
                 store.dispatch(
@@ -775,7 +974,118 @@ export function App() {
               })
             }
           />
-        </div>
+          </div>
+          <TimelinePanel
+            project={previewProject}
+            currentTick={currentTick}
+            isPlaying={isPlaying}
+            loopPlayback={loopPlayback}
+            autoKey={autoKey}
+            selectedNodeId={selectedNodeId}
+            pendingDrafts={pendingDrafts}
+            onTogglePlay={() => {
+              if (!isPlaying && !guardNoPendingDrafts()) return;
+              setIsPlaying((p) => !p);
+            }}
+            onSetTick={(tick) => {
+              if (!guardNoPendingDrafts()) return;
+              setIsPlaying(false);
+              setCurrentTick(Math.max(0, Math.min(project.shot.durationTicks - 1, tick)));
+            }}
+            onStepFrames={(delta) => {
+              if (!guardNoPendingDrafts()) return;
+              setIsPlaying(false);
+              const fps = project.shot.fps;
+              const tpf = (TICKS_PER_SECOND * fps.den) / fps.num;
+              const curFrame = Math.round(currentTick / tpf);
+              const nextFrame = Math.max(0, curFrame + delta);
+              const nextTick = Math.min(
+                project.shot.durationTicks - 1,
+                frameIndexToTick(0, nextFrame, fps),
+              );
+              setCurrentTick(nextTick);
+            }}
+            onToggleLoopPlayback={setLoopPlayback}
+            onToggleAutoKey={setAutoKey}
+            onSetWorkRange={(inTick, outTick) =>
+              runCommand(() => {
+                store.dispatch({
+                  type: 'SET_SHOT_TIMING',
+                  workRange: { inTick, outTick },
+                });
+              })
+            }
+            onKeySelectedNode={() => {
+              if (!selectedNodeId) return;
+              runCommand(() => {
+                store.dispatch({
+                  type: 'CAPTURE_POSE_KEYS',
+                  rootNodeId: selectedNodeId,
+                  tick: currentTick,
+                  interpolation: 'linear',
+                });
+              });
+            }}
+            onCapturePose={() => {
+              if (!selectedNodeId) return;
+              runCommand(() => {
+                store.dispatch({
+                  type: 'CAPTURE_POSE_KEYS',
+                  rootNodeId: selectedNodeId,
+                  tick: currentTick,
+                  interpolation: 'linear',
+                });
+              });
+            }}
+            onCommitDrafts={() =>
+              runCommand(() => {
+                for (const cmd of draftsToUpsertCommands(project, pendingDrafts, 'linear')) {
+                  store.dispatch(cmd);
+                }
+                setPendingDrafts([]);
+              })
+            }
+            onDiscardDrafts={() => {
+              setPendingDrafts([]);
+              setErrorMsg(null);
+            }}
+            onMoveKey={(trackId, fromTick, toTick) =>
+              runCommand(() => {
+                store.dispatch({ type: 'MOVE_KEY', trackId, fromTick, toTick });
+              })
+            }
+            onDuplicateKey={(trackId, fromTick, toTick) =>
+              runCommand(() => {
+                store.dispatch({ type: 'DUPLICATE_KEY', trackId, fromTick, toTick });
+              })
+            }
+            onDeleteKey={(trackId, tick) =>
+              runCommand(() => {
+                store.dispatch({ type: 'DELETE_KEY', trackId, tick });
+              })
+            }
+            onSetKeyInterpolation={(trackId, tick, interpolation) =>
+              runCommand(() => {
+                store.dispatch({
+                  type: 'SET_KEY_INTERPOLATION',
+                  trackId,
+                  tick,
+                  interpolation,
+                });
+              })
+            }
+            onUpsertLoopScope={(loop) =>
+              runCommand(() => {
+                store.dispatch({ type: 'UPSERT_LOOP_SCOPE', loop });
+              })
+            }
+            onDeleteLoopScope={(loopId) =>
+              runCommand(() => {
+                store.dispatch({ type: 'DELETE_LOOP_SCOPE', loopId });
+              })
+            }
+          />
+        </>
       )}
 
       {workspace === 'cutting' && (

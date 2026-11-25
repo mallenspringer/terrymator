@@ -63,3 +63,12 @@ All runtime and test dependencies are pinned to exact versions in `package.json`
 ### 13. Standalone `.collageasset` Package Remapping
 - `packAssetPackage()` strips the root node's external `parentId` and bundles only the referenced subtree, assets, sources, tracks, and SHA-256-verified blobs.
 - `ProjectStore.importAssetPackage()` deduplicates source blobs by SHA-256 and remaps every `sourceId`, `assetId`, `nodeId`, and `trackId` to fresh IDs while preserving internal hierarchy and relative `drawOrder` shifted above existing stage layers.
+
+## 2026-11-25 — Gate G4
+
+### 14. Pure Loop Clock Priority & Sampling Quantization
+- `resolveApplicableLoop()` in `src/domain/clock.ts` enforces strict replacement priority (`property > object > nearest ancestor group`) so loops never nest or multiply speeds unpredictably.
+- `sampleNodeTick()` quantizes each node's master tick to its nearest inherited or overridden sampling rate (`defaultMotionRate` fallback), while camera properties and tile scrolling (`scrollRate * timeSeconds`) always evaluate at full output rate.
+
+### 15. Manual-Key Pending Draft Workflow
+- When Auto-Key is OFF, editing an already-tracked property stages a transient `PendingDraft` (`src/ui/draftState.ts`) overlaid onto `previewProject` for live viewport feedback without mutating committed `ProjectStore` state; time scrubbing/stepping, playback, and saving are guarded with `ERR_PENDING_DRAFT` until the user clicks `Key Drafts` or `Discard Drafts`.

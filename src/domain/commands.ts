@@ -1,3 +1,4 @@
+import { loopSelectorKey } from './clock';
 import { AppError } from './errors';
 import {
   IDENTITY_AFFINE,
@@ -11,9 +12,12 @@ import {
 } from './math';
 import {
   AssetSchema,
+  LoopScopeSchema,
   MaterialRecipeSchema,
   NodeEffectsSchema,
   NodeSchema,
+  RationalFpsSchema,
+  SamplingOverrideSchema,
   SourceSchema,
   TileParamsSchema,
   TrackSchema,
@@ -22,9 +26,11 @@ import {
   defaultEffects,
   type Asset,
   type Interpolation,
+  type LoopScope,
   type MaterialRecipe,
   type NodeEffects,
   type Project,
+  type SamplingOverride,
   type SceneNode,
   type SourceRecord,
   type TileParams,
@@ -208,6 +214,57 @@ export type Command =
       tick: number;
       value: number | boolean;
       interpolation: Interpolation;
+    }
+  | {
+      type: 'DELETE_KEY';
+      trackId: string;
+      tick: number;
+    }
+  | {
+      type: 'MOVE_KEY';
+      trackId: string;
+      fromTick: number;
+      toTick: number;
+      replaceExisting?: boolean;
+    }
+  | {
+      type: 'DUPLICATE_KEY';
+      trackId: string;
+      fromTick: number;
+      toTick: number;
+      replaceExisting?: boolean;
+    }
+  | {
+      type: 'SET_KEY_INTERPOLATION';
+      trackId: string;
+      tick: number;
+      interpolation: Interpolation;
+    }
+  | {
+      type: 'CAPTURE_POSE_KEYS';
+      rootNodeId: string;
+      tick: number;
+      interpolation: Interpolation;
+    }
+  | {
+      type: 'UPSERT_LOOP_SCOPE';
+      loop: LoopScope;
+    }
+  | {
+      type: 'DELETE_LOOP_SCOPE';
+      loopId: string;
+    }
+  | {
+      type: 'SET_NODE_SAMPLING';
+      nodeId: string;
+      samplingOverride: SamplingOverride;
+    }
+  | {
+      type: 'SET_SHOT_TIMING';
+      fps?: RationalFps;
+      durationTicks?: number;
+      defaultMotionRate?: RationalFps;
+      workRange?: { inTick: number; outTick: number };
     };
 
 function assertNoCycle(nodes: Record<string, SceneNode>, nodeId: string, parentId: string | null): void {
@@ -726,12 +783,28 @@ export function applyCommand(project: Project, command: Command): Project {
       if (command.targetKind === 'node' && !next.nodes[command.targetId]) {
         throw new AppError('ERR_INVALID_COMMAND', `Unknown target node "${command.targetId}".`);
       }
+      if (command.property === 'visible' && typeof command.value !== 'boolean') {
+        throw new AppError('ERR_INVALID_COMMAND', 'Visibility key requires a boolean value.');
+      }
+      if (
+        command.property !== 'visible' &&
+        (typeof command.value !== 'number' || !Number.isFinite(command.value))
+      ) {
+        throw new AppError('ERR_INVALID_COMMAND', `Property "${command.property}" requires a finite number.`);
+      }
+      const normalizedValue =
+        command.property === 'drawOrder'
+          ? Math.round(Number(command.value))
+          : command.property === 'opacity'
+            ? Math.max(0, Math.min(1, Number(command.value)))
+            : command.value;
+
       const existing = next.tracks[command.trackId];
       if (existing) {
         const filtered = existing.keys.filter((k) => k.tick !== command.tick);
         filtered.push({
           tick: command.tick,
-          value: command.value,
+          value: normalizedValue,
           interpolation: command.interpolation,
         });
         filtered.sort((a, b) => a.tick - b.tick);
@@ -745,11 +818,201 @@ export function applyCommand(project: Project, command: Command): Project {
           keys: [
             {
               tick: command.tick,
-              value: command.value,
+              value: normalizedValue,
               interpolation: command.interpolation,
             },
           ],
         };
+      }
+      break;
+    }
+    case 'DELETE_KEY': {
+      const track = next.tracks[command.trackId];
+      if (!track) {
+        throw new AppError('ERR_INVALID_COMMAND', `Unknown track "${command.trackId}".`);
+      }
+      track.keys = track.keys.filter((k) => k.tick !== command.tick);
+      if (track.keys.length === 0) {
+        delete next.tracks[command.trackId];
+      }
+      break;
+    }
+    case 'MOVE_KEY': {
+      if (!Number.isInteger(command.toTick) || command.toTick < 0) {
+        throw new AppError('ERR_INVALID_RANGE', 'Target tick must be a non-negative integer.');
+      }
+      const track = next.tracks[command.trackId];
+      if (!track) {
+        throw new AppError('ERR_INVALID_COMMAND', `Unknown track "${command.trackId}".`);
+      }
+      const src = track.keys.find((k) => k.tick === command.fromTick);
+      if (!src) {
+        throw new AppError('ERR_INVALID_COMMAND', `Key at tick ${command.fromTick} not found.`);
+      }
+      if (command.fromTick !== command.toTick) {
+        const collision = track.keys.some((k) => k.tick === command.toTick);
+        if (collision && !command.replaceExisting) {
+          throw new AppError(
+            'ERR_DUPLICATE_KEY',
+            `A key already exists at tick ${command.toTick}.`,
+            { tick: command.toTick },
+          );
+        }
+        track.keys = track.keys.filter(
+          (k) => k.tick !== command.fromTick && k.tick !== command.toTick,
+        );
+        track.keys.push({ ...src, tick: command.toTick });
+        track.keys.sort((a, b) => a.tick - b.tick);
+      }
+      break;
+    }
+    case 'DUPLICATE_KEY': {
+      if (!Number.isInteger(command.toTick) || command.toTick < 0) {
+        throw new AppError('ERR_INVALID_RANGE', 'Target tick must be a non-negative integer.');
+      }
+      const track = next.tracks[command.trackId];
+      if (!track) {
+        throw new AppError('ERR_INVALID_COMMAND', `Unknown track "${command.trackId}".`);
+      }
+      const src = track.keys.find((k) => k.tick === command.fromTick);
+      if (!src) {
+        throw new AppError('ERR_INVALID_COMMAND', `Key at tick ${command.fromTick} not found.`);
+      }
+      const collision = track.keys.some((k) => k.tick === command.toTick);
+      if (collision && !command.replaceExisting) {
+        throw new AppError(
+          'ERR_DUPLICATE_KEY',
+          `A key already exists at tick ${command.toTick}.`,
+          { tick: command.toTick },
+        );
+      }
+      track.keys = track.keys.filter((k) => k.tick !== command.toTick);
+      track.keys.push({ ...src, tick: command.toTick });
+      track.keys.sort((a, b) => a.tick - b.tick);
+      break;
+    }
+    case 'SET_KEY_INTERPOLATION': {
+      const track = next.tracks[command.trackId];
+      if (!track) {
+        throw new AppError('ERR_INVALID_COMMAND', `Unknown track "${command.trackId}".`);
+      }
+      const key = track.keys.find((k) => k.tick === command.tick);
+      if (!key) {
+        throw new AppError('ERR_INVALID_COMMAND', `Key at tick ${command.tick} not found.`);
+      }
+      key.interpolation = command.interpolation;
+      break;
+    }
+    case 'CAPTURE_POSE_KEYS': {
+      if (!Number.isInteger(command.tick) || command.tick < 0) {
+        throw new AppError('ERR_INVALID_RANGE', 'Pose tick must be a non-negative integer.');
+      }
+      const subtreeIds = collectSubtreeNodeIds(next, command.rootNodeId);
+      const props = [
+        'transform.x',
+        'transform.y',
+        'transform.angle',
+        'transform.sx',
+        'transform.sy',
+        'transform.pivotX',
+        'transform.pivotY',
+      ] as const;
+
+      for (const nodeId of subtreeIds) {
+        const node = next.nodes[nodeId]!;
+        for (const prop of props) {
+          const field = prop.slice('transform.'.length) as keyof TransformType;
+          const existingTrack = Object.values(next.tracks).find(
+            (t) => t.targetKind === 'node' && t.targetId === nodeId && t.property === prop,
+          );
+          const trackId = existingTrack?.id ?? `trk-${nodeId}-${prop}`;
+          const val = node.transform[field];
+          if (existingTrack) {
+            existingTrack.keys = existingTrack.keys.filter((k) => k.tick !== command.tick);
+            existingTrack.keys.push({
+              tick: command.tick,
+              value: val,
+              interpolation: command.interpolation,
+            });
+            existingTrack.keys.sort((a, b) => a.tick - b.tick);
+          } else {
+            next.tracks[trackId] = {
+              id: trackId,
+              targetKind: 'node',
+              targetId: nodeId,
+              property: prop,
+              keys: [{ tick: command.tick, value: val, interpolation: command.interpolation }],
+            };
+          }
+        }
+      }
+      break;
+    }
+    case 'UPSERT_LOOP_SCOPE': {
+      const parsed = LoopScopeSchema.parse(command.loop);
+      if (parsed.endTick <= parsed.startTick) {
+        throw new AppError('ERR_INVALID_RANGE', 'Loop endTick must be greater than startTick.');
+      }
+      if (parsed.targetKind === 'camera' && parsed.selectorKind !== 'property') {
+        throw new AppError(
+          'ERR_INVALID_COMMAND',
+          'Camera only supports property-level loop scopes.',
+        );
+      }
+      if (parsed.targetKind === 'node' && !next.nodes[parsed.targetId]) {
+        throw new AppError('ERR_INVALID_COMMAND', `Unknown loop target node "${parsed.targetId}".`);
+      }
+      const selKey = loopSelectorKey(parsed);
+      for (const existing of Object.values(next.loopScopes)) {
+        if (existing.id !== parsed.id && loopSelectorKey(existing) === selKey) {
+          throw new AppError(
+            'ERR_DUPLICATE_KEY',
+            'A loop scope with the same selector already exists.',
+          );
+        }
+      }
+      next.loopScopes[parsed.id] = parsed;
+      break;
+    }
+    case 'DELETE_LOOP_SCOPE': {
+      if (!next.loopScopes[command.loopId]) {
+        throw new AppError('ERR_INVALID_COMMAND', `Unknown loop scope "${command.loopId}".`);
+      }
+      delete next.loopScopes[command.loopId];
+      break;
+    }
+    case 'SET_NODE_SAMPLING': {
+      const node = next.nodes[command.nodeId];
+      if (!node) {
+        throw new AppError('ERR_INVALID_COMMAND', `Unknown node "${command.nodeId}".`);
+      }
+      node.samplingOverride = SamplingOverrideSchema.parse(command.samplingOverride);
+      break;
+    }
+    case 'SET_SHOT_TIMING': {
+      if (command.fps) {
+        next.shot.fps = RationalFpsSchema.parse(command.fps);
+      }
+      if (command.defaultMotionRate) {
+        next.shot.defaultMotionRate = RationalFpsSchema.parse(command.defaultMotionRate);
+      }
+      if (command.durationTicks !== undefined) {
+        if (!Number.isInteger(command.durationTicks) || command.durationTicks <= 0) {
+          throw new AppError('ERR_INVALID_RANGE', 'durationTicks must be a positive integer.');
+        }
+        next.shot.durationTicks = command.durationTicks;
+      }
+      if (command.workRange) {
+        if (
+          !Number.isInteger(command.workRange.inTick) ||
+          !Number.isInteger(command.workRange.outTick) ||
+          command.workRange.inTick < 0 ||
+          command.workRange.outTick <= command.workRange.inTick ||
+          command.workRange.outTick > next.shot.durationTicks
+        ) {
+          throw new AppError('ERR_INVALID_RANGE', 'Invalid workRange bounds.');
+        }
+        next.shot.workRange = { ...command.workRange };
       }
       break;
     }

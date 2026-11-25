@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "F05_WALKING_LOOP",
+  "commands": [
+    {
+      "type": "SET_SHOT_TIMING",
+      "workRange": { "inTick": 10000, "outTick": 120000 }
+    },
+    {
+      "type": "CAPTURE_POSE_KEYS",
+      "rootNodeId": "puppet-loop",
+      "tick": 15000,
+      "interpolation": "smooth"
+    },
+    {
+      "type": "UPSERT_KEY",
+      "trackId": "trk-cam-x",
+      "targetKind": "camera",
+      "targetId": "camera",
+      "property": "camera.x",
+      "tick": 0,
+      "value": 160,
+      "interpolation": "linear"
+    },
+    {
+      "type": "UPSERT_KEY",
+      "trackId": "trk-cam-x",
+      "targetKind": "camera",
+      "targetId": "camera",
+      "property": "camera.x",
+      "tick": 120000,
+      "value": 200,
+      "interpolation": "hold"
+    }
+  ],
+  "checkpoints": [
+    {
+      "tick": 60000,
+      "expectedDrawOrderNodeIds": ["bg-parallax", "torso", "head", "arm", "badge-once"]
+    }
+  ]
+}

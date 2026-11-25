@@ -16,6 +16,7 @@ const forbiddenTokens = [
   'F02_HIDDEN_TORSO',
   'F03_PAPER_RECIPE',
   'F04_JOINTED_PUPPET',
+  'F05_WALKING_LOOP',
   'F06_PARALLAX',
   'F08_ARCHIVE',
 ];

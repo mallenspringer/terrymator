@@ -23,6 +23,7 @@ export type FixtureId =
   | 'F02_HIDDEN_TORSO'
   | 'F03_PAPER_RECIPE'
   | 'F04_JOINTED_PUPPET'
+  | 'F05_WALKING_LOOP'
   | 'F06_PARALLAX'
   | 'F08_ARCHIVE';
 
@@ -273,6 +274,7 @@ export function buildG0DemoFixture(): LoadedFixture {
         ],
       },
     },
+    loopScopes: {},
   };
 
   return { project, blobs };
@@ -455,6 +457,7 @@ export function buildF09ExportClockFixture(): LoadedFixture {
         ],
       },
     },
+    loopScopes: {},
   };
 
   return { project, blobs };
@@ -1054,6 +1057,293 @@ export function buildF06Parallax(): LoadedFixture {
   return { project, blobs };
 }
 
+export function buildF05WalkingLoop(): LoadedFixture {
+  const blobs = new Map<string, BlobRecord>();
+  const tileImg = createTilePattern(48, 32);
+  const torsoImg = createSolidSquare(40, 50, [210, 70, 60, 255]);
+  const armImg = createSolidSquare(36, 12, [50, 190, 90, 255]);
+  const headImg = createSolidSquare(24, 24, [240, 200, 60, 255]);
+  const badgeImg = createSolidSquare(16, 16, [80, 160, 240, 255]);
+
+  blobs.set('blob-f05-tile', makeBlob('blob-f05-tile', tileImg));
+  blobs.set('blob-f05-torso', makeBlob('blob-f05-torso', torsoImg));
+  blobs.set('blob-f05-arm', makeBlob('blob-f05-arm', armImg));
+  blobs.set('blob-f05-head', makeBlob('blob-f05-head', headImg));
+  blobs.set('blob-f05-badge', makeBlob('blob-f05-badge', badgeImg));
+
+  const project = createBlankProject({
+    id: 'proj-f05-walking',
+    name: 'F05 Walking Loop',
+    width: 320,
+    height: 180,
+    fps: { num: 24, den: 1 },
+    durationTicks: TICKS_PER_SECOND * 2,
+    background: { color: '#10141e', alpha: 0 },
+  });
+
+  project.assets = {
+    'asset-f05-tile': {
+      id: 'asset-f05-tile',
+      name: 'BG Tile',
+      kind: 'synthetic-rgba',
+      width: 48,
+      height: 32,
+      anchorX: 0,
+      anchorY: 0,
+      blobId: 'blob-f05-tile',
+      revision: 1,
+    },
+    'asset-f05-torso': {
+      id: 'asset-f05-torso',
+      name: 'Torso',
+      kind: 'synthetic-rgba',
+      width: 40,
+      height: 50,
+      anchorX: 20,
+      anchorY: 25,
+      blobId: 'blob-f05-torso',
+      revision: 1,
+    },
+    'asset-f05-arm': {
+      id: 'asset-f05-arm',
+      name: 'Arm',
+      kind: 'synthetic-rgba',
+      width: 36,
+      height: 12,
+      anchorX: 6,
+      anchorY: 6,
+      blobId: 'blob-f05-arm',
+      revision: 1,
+    },
+    'asset-f05-head': {
+      id: 'asset-f05-head',
+      name: 'Head',
+      kind: 'synthetic-rgba',
+      width: 24,
+      height: 24,
+      anchorX: 12,
+      anchorY: 12,
+      blobId: 'blob-f05-head',
+      revision: 1,
+    },
+    'asset-f05-badge': {
+      id: 'asset-f05-badge',
+      name: 'Once Badge',
+      kind: 'synthetic-rgba',
+      width: 16,
+      height: 16,
+      anchorX: 8,
+      anchorY: 8,
+      blobId: 'blob-f05-badge',
+      revision: 1,
+    },
+  };
+
+  project.nodes = {
+    'bg-parallax': {
+      id: 'bg-parallax',
+      name: 'Parallax BG',
+      kind: 'tile',
+      parentId: null,
+      assetId: 'asset-f05-tile',
+      transform: { x: 0, y: 120, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 0,
+      effects: defaultEffects(),
+      tile: {
+        width: 320,
+        height: 60,
+        scaleX: 1,
+        scaleY: 1,
+        offsetX: 0,
+        offsetY: 0,
+        scrollRateX: -48,
+        scrollRateY: 0,
+        repeatX: true,
+        repeatY: true,
+        mirrorX: false,
+        mirrorY: false,
+      },
+    },
+    'travel-root': {
+      id: 'travel-root',
+      name: 'Travel Root',
+      kind: 'group',
+      parentId: null,
+      transform: { x: 60, y: 100, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 5,
+      samplingOverride: { mode: 'full-rate' },
+      effects: defaultEffects(),
+    },
+    'puppet-loop': {
+      id: 'puppet-loop',
+      name: 'Puppet Loop',
+      kind: 'group',
+      parentId: 'travel-root',
+      transform: { x: 0, y: 0, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 6,
+      effects: defaultEffects(),
+    },
+    torso: {
+      id: 'torso',
+      name: 'Torso',
+      kind: 'sprite',
+      parentId: 'puppet-loop',
+      assetId: 'asset-f05-torso',
+      transform: { x: 0, y: 0, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 20,
+      effects: defaultEffects(),
+    },
+    arm: {
+      id: 'arm',
+      name: 'Arm',
+      kind: 'sprite',
+      parentId: 'torso',
+      assetId: 'asset-f05-arm',
+      transform: { x: 10, y: -5, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 30,
+      effects: defaultEffects(),
+    },
+    head: {
+      id: 'head',
+      name: 'Head (6fps)',
+      kind: 'sprite',
+      parentId: 'torso',
+      assetId: 'asset-f05-head',
+      transform: { x: 0, y: -32, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 25,
+      samplingOverride: { mode: 'fixed', fps: { num: 6, den: 1 } },
+      effects: defaultEffects(),
+    },
+    'badge-once': {
+      id: 'badge-once',
+      name: 'Once Badge',
+      kind: 'sprite',
+      parentId: null,
+      assetId: 'asset-f05-badge',
+      transform: { x: 280, y: 40, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 40,
+      effects: defaultEffects(),
+    },
+  };
+
+  project.tracks = {
+    'trk-travel-x': {
+      id: 'trk-travel-x',
+      targetKind: 'node',
+      targetId: 'travel-root',
+      property: 'transform.x',
+      keys: [
+        { tick: 0, value: 60, interpolation: 'linear' },
+        { tick: TICKS_PER_SECOND * 2, value: 260, interpolation: 'hold' },
+      ],
+    },
+    'trk-torso-y': {
+      id: 'trk-torso-y',
+      targetKind: 'node',
+      targetId: 'torso',
+      property: 'transform.y',
+      keys: [
+        { tick: 0, value: 0, interpolation: 'smooth' },
+        { tick: 30_000, value: -12, interpolation: 'smooth' },
+        { tick: 60_000, value: 0, interpolation: 'hold' },
+      ],
+    },
+    'trk-arm-angle': {
+      id: 'trk-arm-angle',
+      targetKind: 'node',
+      targetId: 'arm',
+      property: 'transform.angle',
+      keys: [
+        { tick: 0, value: 0, interpolation: 'linear' },
+        { tick: 30_000, value: 60, interpolation: 'hold' },
+      ],
+    },
+    'trk-head-angle': {
+      id: 'trk-head-angle',
+      targetKind: 'node',
+      targetId: 'head',
+      property: 'transform.angle',
+      keys: [
+        { tick: 0, value: -15, interpolation: 'linear' },
+        { tick: 60_000, value: 15, interpolation: 'hold' },
+      ],
+    },
+    'trk-badge-y': {
+      id: 'trk-badge-y',
+      targetKind: 'node',
+      targetId: 'badge-once',
+      property: 'transform.y',
+      keys: [
+        { tick: 0, value: 40, interpolation: 'linear' },
+        { tick: 30_000, value: 80, interpolation: 'hold' },
+      ],
+    },
+  };
+
+  project.loopScopes = {
+    'loop-puppet-group': {
+      id: 'loop-puppet-group',
+      selectorKind: 'group',
+      targetKind: 'node',
+      targetId: 'puppet-loop',
+      startTick: 0,
+      endTick: 60_000,
+      activationStartTick: 0,
+      speed: 1,
+      offsetTicks: 0,
+      mode: 'repeat',
+    },
+    'loop-arm-prop': {
+      id: 'loop-arm-prop',
+      selectorKind: 'property',
+      targetKind: 'node',
+      targetId: 'arm',
+      property: 'transform.angle',
+      startTick: 0,
+      endTick: 30_000,
+      activationStartTick: 0,
+      speed: 1,
+      offsetTicks: -5_000,
+      mode: 'ping-pong',
+    },
+    'loop-badge-once': {
+      id: 'loop-badge-once',
+      selectorKind: 'object',
+      targetKind: 'node',
+      targetId: 'badge-once',
+      startTick: 0,
+      endTick: 30_000,
+      activationStartTick: 30_000,
+      speed: 1,
+      offsetTicks: 0,
+      mode: 'once-and-hold',
+    },
+  };
+
+  return { project, blobs };
+}
+
 export function loadFixtureById(id: string): LoadedFixture {
   switch (id) {
     case 'G0_DEMO':
@@ -1066,6 +1356,8 @@ export function loadFixtureById(id: string): LoadedFixture {
       return buildF03PaperRecipe();
     case 'F04_JOINTED_PUPPET':
       return buildF04JointedPuppet();
+    case 'F05_WALKING_LOOP':
+      return buildF05WalkingLoop();
     case 'F06_PARALLAX':
       return buildF06Parallax();
     case 'F08_ARCHIVE':

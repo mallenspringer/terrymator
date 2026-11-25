@@ -66,6 +66,12 @@ export const TileParamsSchema = z.object({
   mirrorY: z.boolean(),
 });
 
+export const SamplingOverrideSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('inherit') }),
+  z.object({ mode: z.literal('full-rate') }),
+  z.object({ mode: z.literal('fixed'), fps: RationalFpsSchema }),
+]);
+
 export const NodeSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -77,6 +83,7 @@ export const NodeSchema = z.object({
   visible: z.boolean(),
   locked: z.boolean(),
   drawOrder: z.number().int(),
+  samplingOverride: SamplingOverrideSchema.optional(),
   effects: NodeEffectsSchema,
   tile: TileParamsSchema.optional(),
 });
@@ -257,12 +264,34 @@ export const TrackSchema = z.object({
   keys: z.array(KeySchema),
 });
 
+export const LoopModeSchema = z.enum(['repeat', 'ping-pong', 'once-and-hold']);
+
+export const LoopScopeSchema = z.object({
+  id: z.string().min(1),
+  selectorKind: z.enum(['property', 'object', 'group']),
+  targetKind: z.enum(['node', 'camera']),
+  targetId: z.string().min(1),
+  property: TrackPropertySchema.optional(),
+  startTick: z.number().int().min(0),
+  endTick: z.number().int().positive(),
+  activationStartTick: z.number().int().min(0),
+  speed: finiteNumber.positive(),
+  offsetTicks: finiteNumber,
+  mode: LoopModeSchema,
+});
+
 export const ShotSchema = z.object({
   width: z.number().int().positive(),
   height: z.number().int().positive(),
   fps: RationalFpsSchema,
   durationTicks: z.number().int().positive(),
   defaultMotionRate: RationalFpsSchema,
+  workRange: z
+    .object({
+      inTick: z.number().int().min(0),
+      outTick: z.number().int().positive(),
+    })
+    .optional(),
   background: z.object({
     color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
     alpha: finiteNumber.min(0).max(1),
@@ -285,8 +314,12 @@ export const ProjectSchema = z.object({
   assets: z.record(z.string(), AssetSchema),
   nodes: z.record(z.string(), NodeSchema),
   tracks: z.record(z.string(), TrackSchema),
+  loopScopes: z.record(z.string(), LoopScopeSchema).default({}),
 });
 
+export type SamplingOverride = z.infer<typeof SamplingOverrideSchema>;
+export type LoopMode = z.infer<typeof LoopModeSchema>;
+export type LoopScope = z.infer<typeof LoopScopeSchema>;
 export type RationalFpsType = z.infer<typeof RationalFpsSchema>;
 export type TransformType = z.infer<typeof TransformSchema>;
 export type NodeEffects = z.infer<typeof NodeEffectsSchema>;
@@ -411,6 +444,7 @@ export function createBlankProject(options?: {
     assets: {},
     nodes: {},
     tracks: {},
+    loopScopes: {},
   };
 }
 

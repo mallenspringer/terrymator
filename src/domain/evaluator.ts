@@ -1,3 +1,4 @@
+import { evaluateLoopTick, resolveApplicableLoop, sampleNodeTick } from './clock';
 import { AppError } from './errors';
 import {
   IDENTITY_AFFINE,
@@ -234,12 +235,30 @@ export function evaluateScene(
   const getTrack = (kind: 'node' | 'camera', targetId: string, prop: TrackProperty): Track | undefined =>
     tracks.get(`${kind}:${targetId}:${prop}`);
 
-  const camX = evaluateTrackNumber(getTrack('camera', 'camera', 'camera.x'), project.shot.camera.x, shotTick);
-  const camY = evaluateTrackNumber(getTrack('camera', 'camera', 'camera.y'), project.shot.camera.y, shotTick);
+  const resolveTick = (
+    kind: 'node' | 'camera',
+    targetId: string,
+    prop: TrackProperty,
+    sampledTick: number,
+  ): number => {
+    const loop = resolveApplicableLoop(project, kind, targetId, prop);
+    return loop ? evaluateLoopTick(sampledTick, loop) : sampledTick;
+  };
+
+  const camX = evaluateTrackNumber(
+    getTrack('camera', 'camera', 'camera.x'),
+    project.shot.camera.x,
+    resolveTick('camera', 'camera', 'camera.x', shotTick),
+  );
+  const camY = evaluateTrackNumber(
+    getTrack('camera', 'camera', 'camera.y'),
+    project.shot.camera.y,
+    resolveTick('camera', 'camera', 'camera.y', shotTick),
+  );
   const camZoom = evaluateTrackNumber(
     getTrack('camera', 'camera', 'camera.zoom'),
     project.shot.camera.zoom,
-    shotTick,
+    resolveTick('camera', 'camera', 'camera.zoom', shotTick),
   );
   if (!Number.isFinite(camZoom) || camZoom <= 0) {
     throw new AppError('ERR_SINGULAR_TRANSFORM', 'Camera zoom must be positive.', { camZoom });
@@ -270,26 +289,28 @@ export function evaluateScene(
   const timeSeconds = shotTick / TICKS_PER_SECOND;
 
   for (const node of orderedNodes) {
+    const nodeSampledTick = sampleNodeTick(project, node.id, shotTick);
+    const evalNum = (prop: TrackProperty, fallback: number): number =>
+      evaluateTrackNumber(
+        getTrack('node', node.id, prop),
+        fallback,
+        resolveTick('node', node.id, prop, nodeSampledTick),
+      );
+    const evalBool = (prop: TrackProperty, fallback: boolean): boolean =>
+      evaluateTrackBoolean(
+        getTrack('node', node.id, prop),
+        fallback,
+        resolveTick('node', node.id, prop, nodeSampledTick),
+      );
+
     const transform: TransformType = {
-      x: evaluateTrackNumber(getTrack('node', node.id, 'transform.x'), node.transform.x, shotTick),
-      y: evaluateTrackNumber(getTrack('node', node.id, 'transform.y'), node.transform.y, shotTick),
-      angle: evaluateTrackNumber(
-        getTrack('node', node.id, 'transform.angle'),
-        node.transform.angle,
-        shotTick,
-      ),
-      sx: evaluateTrackNumber(getTrack('node', node.id, 'transform.sx'), node.transform.sx, shotTick),
-      sy: evaluateTrackNumber(getTrack('node', node.id, 'transform.sy'), node.transform.sy, shotTick),
-      pivotX: evaluateTrackNumber(
-        getTrack('node', node.id, 'transform.pivotX'),
-        node.transform.pivotX,
-        shotTick,
-      ),
-      pivotY: evaluateTrackNumber(
-        getTrack('node', node.id, 'transform.pivotY'),
-        node.transform.pivotY,
-        shotTick,
-      ),
+      x: evalNum('transform.x', node.transform.x),
+      y: evalNum('transform.y', node.transform.y),
+      angle: evalNum('transform.angle', node.transform.angle),
+      sx: evalNum('transform.sx', node.transform.sx),
+      sy: evalNum('transform.sy', node.transform.sy),
+      pivotX: evalNum('transform.pivotX', node.transform.pivotX),
+      pivotY: evalNum('transform.pivotY', node.transform.pivotY),
     };
     validateTransform(transform);
 
@@ -305,15 +326,12 @@ export function evaluateScene(
     worldPivots.set(node.id, worldPivot);
 
     const parentVis = node.parentId ? (effectiveVisible.get(node.parentId) ?? true) : true;
-    const localVis = evaluateTrackBoolean(getTrack('node', node.id, 'visible'), node.visible, shotTick);
+    const localVis = evalBool('visible', node.visible);
     const visible = parentVis && localVis;
     effectiveVisible.set(node.id, visible);
 
     const parentOp = node.parentId ? (effectiveOpacity.get(node.parentId) ?? 1) : 1;
-    const localOp = Math.max(
-      0,
-      Math.min(1, evaluateTrackNumber(getTrack('node', node.id, 'opacity'), node.opacity, shotTick)),
-    );
+    const localOp = Math.max(0, Math.min(1, evalNum('opacity', node.opacity)));
     const opacity = parentOp * localOp;
     effectiveOpacity.set(node.id, opacity);
 
@@ -353,42 +371,25 @@ export function evaluateScene(
       continue;
     }
 
-    const drawOrder = Math.round(
-      evaluateTrackNumber(getTrack('node', node.id, 'drawOrder'), node.drawOrder, shotTick),
-    );
+    const drawOrder = Math.round(evalNum('drawOrder', node.drawOrder));
 
     const effects: NodeEffects = {
       dropShadow: {
         ...node.effects.dropShadow,
         opacity: Math.max(
           0,
-          Math.min(
-            1,
-            evaluateTrackNumber(
-              getTrack('node', node.id, 'effects.dropShadow.opacity'),
-              node.effects.dropShadow.opacity,
-              shotTick,
-            ),
-          ),
+          Math.min(1, evalNum('effects.dropShadow.opacity', node.effects.dropShadow.opacity)),
         ),
         distance: Math.max(
           0,
-          evaluateTrackNumber(
-            getTrack('node', node.id, 'effects.dropShadow.distance'),
-            node.effects.dropShadow.distance,
-            shotTick,
-          ),
+          evalNum('effects.dropShadow.distance', node.effects.dropShadow.distance),
         ),
       },
       outerGlow: {
         ...node.effects.outerGlow,
         intensity: Math.max(
           0,
-          evaluateTrackNumber(
-            getTrack('node', node.id, 'effects.outerGlow.intensity'),
-            node.effects.outerGlow.intensity,
-            shotTick,
-          ),
+          evalNum('effects.outerGlow.intensity', node.effects.outerGlow.intensity),
         ),
       },
       colorAdjust: { ...node.effects.colorAdjust },
@@ -399,16 +400,8 @@ export function evaluateScene(
       if (!node.tile) {
         throw new AppError('ERR_INVALID_SCHEMA', `Tile node "${node.id}" is missing tile parameters.`);
       }
-      const baseOffX = evaluateTrackNumber(
-        getTrack('node', node.id, 'tile.offsetX'),
-        node.tile.offsetX,
-        shotTick,
-      );
-      const baseOffY = evaluateTrackNumber(
-        getTrack('node', node.id, 'tile.offsetY'),
-        node.tile.offsetY,
-        shotTick,
-      );
+      const baseOffX = evalNum('tile.offsetX', node.tile.offsetX);
+      const baseOffY = evalNum('tile.offsetY', node.tile.offsetY);
       evaluatedTile = {
         ...node.tile,
         offsetX: baseOffX + node.tile.scrollRateX * timeSeconds,

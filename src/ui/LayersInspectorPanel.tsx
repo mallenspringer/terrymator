@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { SceneNode, Shot, TileParams, TransformType } from '../domain/schema';
+import type { SamplingOverride, SceneNode, Shot, TileParams, TransformType } from '../domain/schema';
 
 interface LayersInspectorPanelProps {
   nodes: SceneNode[];
@@ -19,6 +19,7 @@ interface LayersInspectorPanelProps {
   onChangePivot: (nodeId: string, pivotX: number, pivotY: number, preserveWorld: boolean) => void;
   onChangeOpacity: (nodeId: string, opacity: number) => void;
   onChangeParent: (nodeId: string, parentId: string | null, preserveWorld: boolean) => void;
+  onChangeSampling: (nodeId: string, samplingOverride: SamplingOverride) => void;
   onChangeTileParams: (nodeId: string, patch: Partial<TileParams>) => void;
   onChangeCamera: (patch: { x?: number; y?: number; zoom?: number }) => void;
   onRenameNode: (nodeId: string, name: string) => void;
@@ -55,6 +56,7 @@ export function LayersInspectorPanel({
   onChangePivot,
   onChangeOpacity,
   onChangeParent,
+  onChangeSampling,
   onChangeTileParams,
   onChangeCamera,
   onRenameNode,
@@ -435,7 +437,52 @@ export function LayersInspectorPanel({
                 }}
               />
             </label>
+            <label className="field-label">
+              Motion Rate
+              <select
+                className="studio-select"
+                data-testid="node-sampling-mode"
+                value={selectedNode.samplingOverride?.mode ?? 'inherit'}
+                onChange={(e) => {
+                  const mode = e.target.value;
+                  if (mode === 'inherit') {
+                    onChangeSampling(selectedNode.id, { mode: 'inherit' });
+                  } else if (mode === 'full-rate') {
+                    onChangeSampling(selectedNode.id, { mode: 'full-rate' });
+                  } else {
+                    onChangeSampling(selectedNode.id, {
+                      mode: 'fixed',
+                      fps: { num: 12, den: 1 },
+                    });
+                  }
+                }}
+              >
+                <option value="inherit">Inherit</option>
+                <option value="full-rate">Full Rate</option>
+                <option value="fixed">Fixed FPS</option>
+              </select>
+            </label>
           </div>
+          {selectedNode.samplingOverride?.mode === 'fixed' && (
+            <label className="field-label" style={{ marginTop: 4 }}>
+              Fixed Sampling FPS
+              <input
+                type="number"
+                min="1"
+                max="60"
+                className="studio-input"
+                data-testid="node-sampling-fps"
+                value={selectedNode.samplingOverride.fps.num}
+                onChange={(e) => {
+                  const num = Math.max(1, Math.min(60, Math.round(Number(e.target.value) || 12)));
+                  onChangeSampling(selectedNode.id, {
+                    mode: 'fixed',
+                    fps: { num, den: 1 },
+                  });
+                }}
+              />
+            </label>
+          )}
 
           {selectedNode.kind === 'tile' && selectedNode.tile && (
             <div style={{ marginTop: 8 }}>
