@@ -19,11 +19,15 @@ import {
   canonicalStringify,
   createBlankProject,
   validateProject,
+  type Asset,
   type MaterialRecipe,
   type Project,
+  type SceneNode,
   type SourceMimeType,
   type SourceRecord,
+  type Track,
 } from '../domain/schema';
+import type { AssetPackagePayload } from '../persistence/assetPackage';
 import { AsyncJobGuard } from './asyncJobs';
 import { BlobStore, collectProjectBlobIds, type BlobRecord } from './blobStore';
 import { UndoHistory, type HistoryStats } from './history';
@@ -409,6 +413,126 @@ export class ProjectStore {
       throw new AppError('ERR_MISSING_ASSET', `Source blob "${src.blobId}" not found.`);
     }
     return { width: blob.width, height: blob.height, rgba: blob.rgba };
+  }
+
+  public async importAssetPackage(unpacked: {
+    payload: AssetPackagePayload;
+    blobs: Map<string, BlobRecord>;
+  }): Promise<{ importedNodeIds: string[]; importedAssetIds: string[] }> {
+    if (!this.project) {
+      throw new AppError('ERR_RENDER_NOT_READY', 'No project loaded in store.');
+    }
+
+    const blobIdMap = new Map<string, string>();
+    for (const [oldBlobId, rec] of unpacked.blobs.entries()) {
+      if (rec.role === 'source') {
+        const mime = (rec.mimeType as SourceMimeType) || 'image/png';
+        const { record } = await this.blobStore.putSource(rec.bytes, mime, {
+          width: rec.width,
+          height: rec.height,
+          rgba: rec.rgba,
+        });
+        blobIdMap.set(oldBlobId, record.id);
+      } else {
+        const record = await this.blobStore.putImmutableBlob(
+          rec.role,
+          rec.mimeType,
+          rec.bytes,
+          { width: rec.width, height: rec.height, rgba: rec.rgba },
+        );
+        blobIdMap.set(oldBlobId, record.id);
+      }
+    }
+
+    const sourceIdMap = new Map<string, string>();
+    const remappedSources: SourceRecord[] = [];
+    for (const src of unpacked.payload.sources) {
+      const newId = createId('source');
+      sourceIdMap.set(src.id, newId);
+      remappedSources.push({
+        ...structuredClone(src),
+        id: newId,
+        blobId: blobIdMap.get(src.blobId) ?? src.blobId,
+      });
+    }
+
+    const assetIdMap = new Map<string, string>();
+    const remappedAssets: Asset[] = [];
+    for (const asset of unpacked.payload.assets) {
+      const newId = createId('asset');
+      assetIdMap.set(asset.id, newId);
+      const clone = structuredClone(asset);
+      clone.id = newId;
+      if (clone.kind === 'synthetic-rgba') {
+        clone.blobId = blobIdMap.get(clone.blobId) ?? clone.blobId;
+      } else if (clone.kind === 'material') {
+        clone.rasterBlobId = blobIdMap.get(clone.rasterBlobId) ?? clone.rasterBlobId;
+        if (clone.recipe.imageSourceId) {
+          clone.recipe.imageSourceId =
+            sourceIdMap.get(clone.recipe.imageSourceId) ?? clone.recipe.imageSourceId;
+        }
+      } else {
+        clone.sourceId = sourceIdMap.get(clone.sourceId) ?? clone.sourceId;
+        if (clone.maskBlobId) {
+          clone.maskBlobId = blobIdMap.get(clone.maskBlobId) ?? clone.maskBlobId;
+        }
+        if (clone.overlayBlobId) {
+          clone.overlayBlobId = blobIdMap.get(clone.overlayBlobId) ?? clone.overlayBlobId;
+        }
+      }
+      remappedAssets.push(clone);
+    }
+
+    const nodeIdMap = new Map<string, string>();
+    for (const node of unpacked.payload.nodes) {
+      nodeIdMap.set(node.id, createId(node.kind === 'group' ? 'group' : 'node'));
+    }
+
+    const maxOrder = Object.values(this.project.nodes).reduce(
+      (max, n) => Math.max(max, n.drawOrder),
+      0,
+    );
+    const minPkgOrder = unpacked.payload.nodes.reduce(
+      (min, n) => Math.min(min, n.drawOrder),
+      0,
+    );
+    const orderShift = maxOrder - minPkgOrder + 1;
+
+    const remappedNodes: SceneNode[] = unpacked.payload.nodes.map((node) => {
+      const clone = structuredClone(node);
+      clone.id = nodeIdMap.get(node.id)!;
+      clone.parentId = node.parentId ? (nodeIdMap.get(node.parentId) ?? null) : null;
+      if (clone.assetId) {
+        clone.assetId = assetIdMap.get(clone.assetId) ?? clone.assetId;
+      }
+      clone.drawOrder = node.drawOrder + orderShift;
+      return clone;
+    });
+
+    const remappedTracks: Track[] = unpacked.payload.tracks.map((track) => {
+      const clone = structuredClone(track);
+      clone.id = createId('trk');
+      if (clone.targetKind === 'node') {
+        clone.targetId = nodeIdMap.get(clone.targetId) ?? clone.targetId;
+      }
+      return clone;
+    });
+
+    this.dispatch(
+      {
+        type: 'IMPORT_PACKAGE_PAYLOAD',
+        sources: remappedSources,
+        assets: remappedAssets,
+        nodes: remappedNodes,
+        tracks: remappedTracks,
+      },
+      { label: `Import ${unpacked.payload.name}` },
+    );
+
+    return {
+      importedNodeIds: remappedNodes.map((n) => n.id),
+      importedAssetIds: remappedAssets.map((a) => a.id),
+    };
   }
 
   public undo(): Project | null {

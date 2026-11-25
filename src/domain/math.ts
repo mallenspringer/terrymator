@@ -111,3 +111,72 @@ export function invertAffine(m: Affine2D): Affine2D {
     ty: (m.b * m.tx - m.a * m.ty) * invDet,
   };
 }
+
+export function decomposeAffineToTRS(
+  m: Affine2D,
+  pivotX: number,
+  pivotY: number,
+  preferredSxSign = 1,
+): Transform {
+  const det = determinantAffine(m);
+  if (!Number.isFinite(det) || Math.abs(det) < MIN_DET) {
+    throw new AppError('ERR_SINGULAR_TRANSFORM', 'Cannot decompose singular affine matrix.', {
+      det,
+    });
+  }
+
+  const lenU = Math.hypot(m.a, m.b);
+  const lenV = Math.hypot(m.c, m.d);
+  if (lenU < MIN_SCALE || lenV < MIN_SCALE) {
+    throw new AppError('ERR_SINGULAR_TRANSFORM', 'Transform scale is near zero.');
+  }
+
+  const orthoError = Math.abs(m.a * m.c + m.b * m.d) / (lenU * lenV);
+  if (orthoError > 1e-4) {
+    throw new AppError(
+      'ERR_SHEAR_NOT_REPRESENTABLE',
+      'Reparenting would introduce shear that cannot be represented losslessly by TRS.',
+      { orthoError },
+    );
+  }
+
+  const sx = preferredSxSign < 0 ? -lenU : lenU;
+  const angleRad = Math.atan2(m.b / sx, m.a / sx);
+  const cos = Math.cos(angleRad);
+  const sin = Math.sin(angleRad);
+  const sy = m.d * cos - m.c * sin;
+  const x = m.tx + m.a * pivotX + m.c * pivotY;
+  const y = m.ty + m.b * pivotX + m.d * pivotY;
+  const angle = (angleRad * 180) / Math.PI;
+
+  const result: Transform = { x, y, angle, sx, sy, pivotX, pivotY };
+  const recomposed = composeLocalMatrix(result);
+  const maxDiff = Math.max(
+    Math.abs(recomposed.a - m.a),
+    Math.abs(recomposed.b - m.b),
+    Math.abs(recomposed.c - m.c),
+    Math.abs(recomposed.d - m.d),
+    Math.abs(recomposed.tx - m.tx),
+    Math.abs(recomposed.ty - m.ty),
+  );
+  if (maxDiff > 1e-3) {
+    throw new AppError(
+      'ERR_SHEAR_NOT_REPRESENTABLE',
+      'Affine matrix cannot be losslessly decomposed into TRS.',
+      { maxDiff },
+    );
+  }
+
+  return result;
+}
+
+export function compensatePivotChange(t: Transform, newPivotX: number, newPivotY: number): Transform {
+  const m = composeLocalMatrix(t);
+  return {
+    ...t,
+    pivotX: newPivotX,
+    pivotY: newPivotY,
+    x: m.tx + m.a * newPivotX + m.c * newPivotY,
+    y: m.ty + m.b * newPivotX + m.d * newPivotY,
+  };
+}

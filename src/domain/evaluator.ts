@@ -1,10 +1,12 @@
 import { AppError } from './errors';
 import {
   IDENTITY_AFFINE,
+  applyAffineToPoint,
   composeLocalMatrix,
   multiplyAffine,
   validateTransform,
   type Affine2D,
+  type Point2D,
 } from './math';
 import type {
   Asset,
@@ -44,6 +46,16 @@ export interface EvaluatedDrawItem {
   tile?: TileParams;
 }
 
+export interface EvaluatedJoint {
+  nodeId: string;
+  name: string;
+  kind: 'group' | 'sprite' | 'tile';
+  parentId: string | null;
+  worldPivot: Point2D;
+  parentWorldPivot: Point2D | null;
+  locked: boolean;
+}
+
 export interface EvaluatedScene {
   shotTick: number;
   shotWidth: number;
@@ -55,6 +67,7 @@ export interface EvaluatedScene {
   globalShadowAngle: number;
   camera: EvaluatedCamera;
   drawList: EvaluatedDrawItem[];
+  joints: EvaluatedJoint[];
 }
 
 export interface EvaluateOptions {
@@ -248,10 +261,12 @@ export function evaluateScene(
 
   const orderedNodes = topologicalOrder(project.nodes);
   const worldMatrices = new Map<string, Affine2D>();
+  const worldPivots = new Map<string, Point2D>();
   const effectiveVisible = new Map<string, boolean>();
   const effectiveOpacity = new Map<string, number>();
 
   const drawList: EvaluatedDrawItem[] = [];
+  const joints: EvaluatedJoint[] = [];
   const timeSeconds = shotTick / TICKS_PER_SECOND;
 
   for (const node of orderedNodes) {
@@ -283,6 +298,12 @@ export function evaluateScene(
     const worldMatrix = multiplyAffine(parentWorld, localMatrix);
     worldMatrices.set(node.id, worldMatrix);
 
+    const worldPivot = applyAffineToPoint(worldMatrix, {
+      x: transform.pivotX,
+      y: transform.pivotY,
+    });
+    worldPivots.set(node.id, worldPivot);
+
     const parentVis = node.parentId ? (effectiveVisible.get(node.parentId) ?? true) : true;
     const localVis = evaluateTrackBoolean(getTrack('node', node.id, 'visible'), node.visible, shotTick);
     const visible = parentVis && localVis;
@@ -295,6 +316,18 @@ export function evaluateScene(
     );
     const opacity = parentOp * localOp;
     effectiveOpacity.set(node.id, opacity);
+
+    if (visible) {
+      joints.push({
+        nodeId: node.id,
+        name: node.name,
+        kind: node.kind,
+        parentId: node.parentId,
+        worldPivot,
+        parentWorldPivot: node.parentId ? (worldPivots.get(node.parentId) ?? null) : null,
+        locked: node.locked,
+      });
+    }
 
     if (node.kind === 'group') {
       continue;
@@ -422,5 +455,6 @@ export function evaluateScene(
       stageToOutput,
     },
     drawList,
+    joints,
   };
 }

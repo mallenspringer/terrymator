@@ -31,6 +31,7 @@ export interface RenderOptions {
   transparentBackground?: boolean;
   viewport?: EditorViewport;
   showGuides?: boolean;
+  showWireframe?: boolean;
   selectedNodeId?: string | null;
 }
 
@@ -398,6 +399,29 @@ export class PixiStageRenderer {
         }
       }
       cameraContainer.addChild(guides);
+    }
+
+    if (options.showWireframe) {
+      const wire = new Graphics();
+      const camScale = Math.max(0.05, Math.hypot(camM.a, camM.b));
+      const invZoom = 1 / camScale;
+
+      for (const joint of scene.joints) {
+        if (joint.parentWorldPivot) {
+          wire
+            .moveTo(joint.parentWorldPivot.x, joint.parentWorldPivot.y)
+            .lineTo(joint.worldPivot.x, joint.worldPivot.y)
+            .stroke({ color: 0xfbbf24, width: 1.5 * invZoom, alpha: 0.85 });
+        }
+      }
+      for (const joint of scene.joints) {
+        const isSel = joint.nodeId === options.selectedNodeId;
+        wire
+          .circle(joint.worldPivot.x, joint.worldPivot.y, (isSel ? 5 : 3.5) * invZoom)
+          .fill({ color: isSel ? 0x22d3ee : 0xfbbf24, alpha: 0.95 })
+          .stroke({ color: 0x0f1218, width: 1 * invZoom, alpha: 0.9 });
+      }
+      cameraContainer.addChild(wire);
     }
 
     this.activeFilterCount = createdFilters.length;

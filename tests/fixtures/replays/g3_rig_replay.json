@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "F04_JOINTED_PUPPET",
+  "commands": [
+    {
+      "type": "SET_NODE_PIVOT_PRESERVE_WORLD",
+      "nodeId": "upper-arm",
+      "pivotX": 0,
+      "pivotY": 0
+    },
+    {
+      "type": "SET_NODE_TRANSFORM",
+      "nodeId": "upper-arm",
+      "transform": { "angle": 45 }
+    },
+    {
+      "type": "DUPLICATE_SUBTREE",
+      "rootNodeId": "upper-arm",
+      "idMap": {
+        "upper-arm": "upper-arm-dup",
+        "forearm": "forearm-dup",
+        "hand": "hand-dup"
+      },
+      "offsetX": 0,
+      "offsetY": 40
+    },
+    {
+      "type": "SET_CAMERA",
+      "x": 180,
+      "y": 90,
+      "zoom": 1.25
+    }
+  ],
+  "checkpoints": [
+    {
+      "tick": 0,
+      "expectedDrawOrderNodeIds": [
+        "upper-arm",
+        "torso",
+        "forearm",
+        "hand",
+        "upper-arm-dup",
+        "forearm-dup",
+        "hand-dup"
+      ]
+    }
+  ]
+}

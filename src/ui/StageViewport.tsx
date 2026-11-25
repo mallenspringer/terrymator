@@ -16,6 +16,7 @@ interface StageViewportProps {
   blobs: Map<string, BlobRecord>;
   renderer: PixiStageRenderer;
   viewport: EditorViewport;
+  showWireframe: boolean;
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string | null) => void;
   onDragMoveNode: (nodeId: string, x: number, y: number, coalesceKey: string) => void;
@@ -31,6 +32,7 @@ export function StageViewport({
   blobs,
   renderer,
   viewport,
+  showWireframe,
   selectedNodeId,
   onSelectNode,
   onDragMoveNode,
@@ -68,6 +70,7 @@ export function StageViewport({
         transparentBackground: project.shot.background.alpha === 0,
         viewport,
         showGuides: true,
+        showWireframe,
         selectedNodeId,
       });
       if (!active) return;
@@ -81,7 +84,7 @@ export function StageViewport({
     return () => {
       active = false;
     };
-  }, [blobs, project.shot.background.alpha, renderer, scene, selectedNodeId, viewport]);
+  }, [blobs, project.shot.background.alpha, renderer, scene, selectedNodeId, showWireframe, viewport]);
 
   const toCanvasCoords = (e: PointerEvent<HTMLDivElement>): { cx: number; cy: number } => {
     const rect = e.currentTarget.getBoundingClientRect();

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { ProjectStore } from '../application/store';
 import { decodeImageInBrowser } from '../assets/sourceImport';
-import { createDefaultNode } from '../domain/commands';
+import { collectSubtreeNodeIds, createDefaultNode } from '../domain/commands';
 import { isAppError } from '../domain/errors';
 import { createId } from '../domain/ids';
 import {
@@ -11,8 +11,10 @@ import {
   type MaterialAsset,
   type MaterialRecipe,
   type Project,
+  type TileParams,
   type TransformType,
 } from '../domain/schema';
+import { packAssetPackage, unpackAssetPackage } from '../persistence/assetPackage';
 import { downloadBytes, readFileAsUint8Array } from '../persistence/fileIO';
 import {
   IndexedDbRecoveryStorage,
@@ -40,6 +42,7 @@ export function App() {
   const [recovery] = useState(() => new RecoveryManager(new IndexedDbRecoveryStorage()));
 
   const openInputRef = useRef<HTMLInputElement | null>(null);
+  const pkgInputRef = useRef<HTMLInputElement | null>(null);
 
   const [workspace, setWorkspace] = useState<WorkspaceMode>('studio');
   const [project, setProject] = useState<Project>(() => store.snapshot());
@@ -47,6 +50,7 @@ export function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [activeCutoutId, setActiveCutoutId] = useState<string | null>(null);
   const [activeMaterialId, setActiveMaterialId] = useState<string | null>(null);
+  const [showWireframe, setShowWireframe] = useState<boolean>(false);
   const [viewport, setViewport] = useState<EditorViewport>({ panX: 0, panY: 0, zoom: 1 });
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [recoveryInfo, setRecoveryInfo] = useState<RecoveryInfo | null>(null);
@@ -250,6 +254,37 @@ export function App() {
     }
   };
 
+  const handleImportPackageFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      setErrorMsg(null);
+      const bytes = await readFileAsUint8Array(file);
+      const unpacked = await unpackAssetPackage(bytes, decodeImageInBrowser);
+      const res = await store.importAssetPackage(unpacked);
+      if (res.importedNodeIds[0]) {
+        setSelectedNodeId(res.importedNodeIds[0]);
+      }
+    } catch (err) {
+      setErrorMsg(isAppError(err) ? `${err.code}: ${err.message}` : String(err));
+    }
+  };
+
+  const handleExportPackage = async (
+    target: { kind: 'asset'; assetId: string } | { kind: 'rig'; rootNodeId: string },
+    fallbackName: string,
+  ) => {
+    try {
+      setErrorMsg(null);
+      const bytes = await packAssetPackage(store.snapshot(), store.getBlobs(), target);
+      const safeName = fallbackName.toLowerCase().replace(/[^a-z0-9-_]+/g, '-') || 'package';
+      downloadBytes(bytes, `${safeName}.collageasset`, 'application/zip');
+    } catch (err) {
+      setErrorMsg(isAppError(err) ? `${err.code}: ${err.message}` : String(err));
+    }
+  };
+
   const handleRecover = async () => {
     try {
       setErrorMsg(null);
@@ -346,6 +381,22 @@ export function App() {
         >
           Save .collage
         </button>
+        <button
+          type="button"
+          className="studio-btn"
+          data-testid="import-package-btn"
+          onClick={() => pkgInputRef.current?.click()}
+        >
+          Import .collageasset
+        </button>
+        <input
+          ref={pkgInputRef}
+          data-testid="import-package-input"
+          type="file"
+          accept=".collageasset,.zip,application/zip"
+          style={{ display: 'none' }}
+          onChange={(e) => void handleImportPackageFile(e)}
+        />
 
         <div className="toolbar-sep" />
         <button
@@ -403,6 +454,14 @@ export function App() {
               onClick={() => setViewport({ panX: 0, panY: 0, zoom: 1 })}
             >
               Reset View
+            </button>
+            <button
+              type="button"
+              className={`studio-btn${showWireframe ? ' primary' : ''}`}
+              data-testid="toggle-wireframe-btn"
+              onClick={() => setShowWireframe((w) => !w)}
+            >
+              {showWireframe ? 'Wireframe: On' : 'Wireframe: Off'}
             </button>
           </>
         )}
@@ -507,6 +566,50 @@ export function App() {
                 setSelectedNodeId(nodeId);
               })
             }
+            onAddTileToStage={(assetId) =>
+              runCommand(() => {
+                const asset = project.assets[assetId];
+                if (!asset) return;
+                const minOrder = Object.values(project.nodes).reduce(
+                  (min, n) => Math.min(min, n.drawOrder),
+                  1,
+                );
+                const nodeId = createId('tile');
+                store.dispatch({
+                  type: 'ADD_NODE',
+                  node: createDefaultNode({
+                    id: nodeId,
+                    name: `${asset.name} Tile`,
+                    kind: 'tile',
+                    assetId,
+                    x: project.shot.width / 2,
+                    y: project.shot.height / 2,
+                    drawOrder: minOrder - 1,
+                    tile: {
+                      width: project.shot.width,
+                      height: project.shot.height,
+                      scaleX: 1,
+                      scaleY: 1,
+                      offsetX: 0,
+                      offsetY: 0,
+                      scrollRateX: 0,
+                      scrollRateY: 0,
+                      repeatX: true,
+                      repeatY: true,
+                      mirrorX: false,
+                      mirrorY: false,
+                    },
+                  }),
+                });
+                setSelectedNodeId(nodeId);
+              })
+            }
+            onExportAssetPackage={(assetId) => {
+              const asset = project.assets[assetId];
+              if (asset) {
+                void handleExportPackage({ kind: 'asset', assetId }, asset.name);
+              }
+            }}
             onDeleteAsset={(assetId) =>
               runCommand(() => {
                 store.dispatch({ type: 'DELETE_ASSET', assetId });
@@ -520,6 +623,7 @@ export function App() {
             blobs={blobs}
             renderer={renderer}
             viewport={viewport}
+            showWireframe={showWireframe}
             selectedNodeId={selectedNodeId}
             onSelectNode={setSelectedNodeId}
             onDragMoveNode={(nodeId, x, y, coalesceKey) =>
@@ -535,6 +639,7 @@ export function App() {
 
           <LayersInspectorPanel
             nodes={Object.values(project.nodes)}
+            shot={project.shot}
             selectedNode={selectedNode}
             onSelectNode={setSelectedNodeId}
             onAddGroup={() =>
@@ -562,6 +667,24 @@ export function App() {
                 setSelectedNodeId(newId);
               })
             }
+            onDuplicateSubtree={(rootNodeId) =>
+              runCommand(() => {
+                const oldIds = collectSubtreeNodeIds(project, rootNodeId);
+                const idMap: Record<string, string> = {};
+                for (const id of oldIds) {
+                  const n = project.nodes[id]!;
+                  idMap[id] = createId(n.kind === 'group' ? 'group' : 'node');
+                }
+                store.dispatch({ type: 'DUPLICATE_SUBTREE', rootNodeId, idMap });
+                setSelectedNodeId(idMap[rootNodeId] ?? null);
+              })
+            }
+            onExportRigPackage={(rootNodeId) => {
+              const node = project.nodes[rootNodeId];
+              if (node) {
+                void handleExportPackage({ kind: 'rig', rootNodeId }, node.name);
+              }
+            }}
             onMakeUnique={(nodeId) =>
               runCommand(() => {
                 store.dispatch({
@@ -597,14 +720,50 @@ export function App() {
                 store.dispatch({ type: 'SET_NODE_TRANSFORM', nodeId, transform: patch });
               })
             }
+            onChangePivot={(nodeId, pivotX, pivotY, preserveWorld) =>
+              runCommand(() => {
+                if (preserveWorld) {
+                  store.dispatch({
+                    type: 'SET_NODE_PIVOT_PRESERVE_WORLD',
+                    nodeId,
+                    pivotX,
+                    pivotY,
+                  });
+                } else {
+                  store.dispatch({
+                    type: 'SET_NODE_TRANSFORM',
+                    nodeId,
+                    transform: { pivotX, pivotY },
+                  });
+                }
+              })
+            }
             onChangeOpacity={(nodeId, opacity) =>
               runCommand(() => {
                 store.dispatch({ type: 'SET_NODE_OPACITY', nodeId, opacity });
               })
             }
-            onChangeParent={(nodeId, parentId) =>
+            onChangeParent={(nodeId, parentId, preserveWorld) =>
               runCommand(() => {
-                store.dispatch({ type: 'SET_NODE_PARENT', nodeId, parentId });
+                if (preserveWorld) {
+                  store.dispatch({
+                    type: 'REPARENT_NODE_PRESERVE_WORLD',
+                    nodeId,
+                    parentId,
+                  });
+                } else {
+                  store.dispatch({ type: 'SET_NODE_PARENT', nodeId, parentId });
+                }
+              })
+            }
+            onChangeTileParams={(nodeId, patch: Partial<TileParams>) =>
+              runCommand(() => {
+                store.dispatch({ type: 'SET_NODE_TILE_PARAMS', nodeId, tile: patch });
+              })
+            }
+            onChangeCamera={(patch) =>
+              runCommand(() => {
+                store.dispatch({ type: 'SET_CAMERA', ...patch });
               })
             }
             onRenameNode={(nodeId, name) =>

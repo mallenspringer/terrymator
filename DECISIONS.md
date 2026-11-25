@@ -53,3 +53,13 @@ All runtime and test dependencies are pinned to exact versions in `package.json`
 
 ### 11. Deterministic Seeded Material Synthesis
 - `src/assets/materialSynthesis.ts` uses pure integer-hashed 2D value noise (`hash2D` + `valueNoise2D`) and `2x2` subpixel shape supersampling with `Math.random()` strictly banned, guaranteeing bit-for-bit identical rasters across Node and Browser for any given `MaterialRecipe`.
+
+## 2026-11-25 — Gate G3
+
+### 12. Lossless Preserve-World TRS Decomposition & Shear Refusal
+- `decomposeAffineToTRS()` in `src/domain/math.ts` verifies column orthogonality (`|u·v| / (|u||v|) <= 1e-4`) and recomposition accuracy (`<= 1e-3`) before committing `REPARENT_NODE_PRESERVE_WORLD`, throwing `ERR_SHEAR_NOT_REPRESENTABLE` rather than silently approximating sheared transforms.
+- Animated nodes (`hasAnimatedTransform()`) are protected by `ERR_ANIMATED_TRANSFORM_LOCKED` unless explicitly overridden, preventing accidental pose corruption during setup-mode reparenting or pivot changes.
+
+### 13. Standalone `.collageasset` Package Remapping
+- `packAssetPackage()` strips the root node's external `parentId` and bundles only the referenced subtree, assets, sources, tracks, and SHA-256-verified blobs.
+- `ProjectStore.importAssetPackage()` deduplicates source blobs by SHA-256 and remaps every `sourceId`, `assetId`, `nodeId`, and `trackId` to fresh IDs while preserving internal hierarchy and relative `drawOrder` shifted above existing stage layers.

@@ -10,6 +10,7 @@ import type { MaterialRecipe, Project, SourceRecord } from '../domain/schema';
 import { probeExportCapabilities } from '../export/capabilities';
 import { exportProjectRange } from '../export/pipeline';
 import type { CapabilityReport, ExportOptions } from '../export/types';
+import { packAssetPackage, unpackAssetPackage } from '../persistence/assetPackage';
 import {
   IndexedDbRecoveryStorage,
   RecoveryManager,
@@ -46,6 +47,10 @@ export interface StudioHarness {
   loadFixture(id: string): Promise<void>;
   loadArchive(bytes: number[]): Promise<void>;
   packCurrentArchive(): Promise<number[]>;
+  packAssetPackage(
+    target: { kind: 'asset'; assetId: string } | { kind: 'rig'; rootNodeId: string },
+  ): Promise<number[]>;
+  importAssetPackage(bytes: number[]): Promise<{ importedNodeIds: string[]; importedAssetIds: string[] }>;
   importSource(
     name: string,
     bytes: number[],
@@ -113,6 +118,16 @@ export function createStudioHarness(): StudioHarness {
     async packCurrentArchive(): Promise<number[]> {
       const packed = await packArchive(store.snapshot(), store.getBlobs());
       return Array.from(packed);
+    },
+
+    async packAssetPackage(target): Promise<number[]> {
+      const packed = await packAssetPackage(store.snapshot(), store.getBlobs(), target);
+      return Array.from(packed);
+    },
+
+    async importAssetPackage(bytes: number[]) {
+      const unpacked = await unpackAssetPackage(new Uint8Array(bytes), decodeImageInBrowser);
+      return store.importAssetPackage(unpacked);
     },
 
     async importSource(name: string, bytes: number[], options?: { createInitialAsset?: boolean }) {

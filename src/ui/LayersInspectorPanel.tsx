@@ -1,41 +1,68 @@
 import { useState } from 'react';
-import type { SceneNode, TransformType } from '../domain/schema';
+import type { SceneNode, Shot, TileParams, TransformType } from '../domain/schema';
 
 interface LayersInspectorPanelProps {
   nodes: SceneNode[];
+  shot: Shot;
   selectedNode: SceneNode | null;
   onSelectNode: (nodeId: string | null) => void;
   onAddGroup: () => void;
   onDuplicateNode: (nodeId: string) => void;
+  onDuplicateSubtree: (nodeId: string) => void;
+  onExportRigPackage: (nodeId: string) => void;
   onMakeUnique: (nodeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onToggleVisible: (nodeId: string, visible: boolean) => void;
   onToggleLocked: (nodeId: string, locked: boolean) => void;
   onChangeDrawOrder: (nodeId: string, drawOrder: number) => void;
   onChangeTransform: (nodeId: string, patch: Partial<TransformType>) => void;
+  onChangePivot: (nodeId: string, pivotX: number, pivotY: number, preserveWorld: boolean) => void;
   onChangeOpacity: (nodeId: string, opacity: number) => void;
-  onChangeParent: (nodeId: string, parentId: string | null) => void;
+  onChangeParent: (nodeId: string, parentId: string | null, preserveWorld: boolean) => void;
+  onChangeTileParams: (nodeId: string, patch: Partial<TileParams>) => void;
+  onChangeCamera: (patch: { x?: number; y?: number; zoom?: number }) => void;
   onRenameNode: (nodeId: string, name: string) => void;
+}
+
+function getDepth(node: SceneNode, nodeMap: Map<string, SceneNode>): number {
+  let depth = 0;
+  let cursor = node.parentId;
+  const seen = new Set<string>([node.id]);
+  while (cursor) {
+    if (seen.has(cursor)) break;
+    seen.add(cursor);
+    depth += 1;
+    cursor = nodeMap.get(cursor)?.parentId ?? null;
+  }
+  return depth;
 }
 
 export function LayersInspectorPanel({
   nodes,
+  shot,
   selectedNode,
   onSelectNode,
   onAddGroup,
   onDuplicateNode,
+  onDuplicateSubtree,
+  onExportRigPackage,
   onMakeUnique,
   onDeleteNode,
   onToggleVisible,
   onToggleLocked,
   onChangeDrawOrder,
   onChangeTransform,
+  onChangePivot,
   onChangeOpacity,
   onChangeParent,
+  onChangeTileParams,
+  onChangeCamera,
   onRenameNode,
 }: LayersInspectorPanelProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [preserveWorld, setPreserveWorld] = useState<boolean>(true);
 
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
   const sortedLayers = [...nodes].sort((a, b) => {
     if (a.drawOrder !== b.drawOrder) return b.drawOrder - a.drawOrder;
     return a.id.localeCompare(b.id);
@@ -48,7 +75,7 @@ export function LayersInspectorPanel({
       if (seen.has(cursor)) break;
       seen.add(cursor);
       if (collapsedGroups[cursor]) return true;
-      cursor = nodes.find((n) => n.id === cursor)?.parentId ?? null;
+      cursor = nodeMap.get(cursor)?.parentId ?? null;
     }
     return false;
   };
@@ -76,12 +103,14 @@ export function LayersInspectorPanel({
             const isSelected = selectedNode?.id === node.id;
             const isGroup = node.kind === 'group';
             const isCollapsed = Boolean(collapsedGroups[node.id]);
+            const depth = getDepth(node, nodeMap);
 
             return (
               <div
                 key={node.id}
                 className={`card-item${isSelected ? ' selected' : ''}`}
                 data-testid={`layer-row-${node.id}`}
+                style={{ marginLeft: `${Math.min(depth, 5) * 10}px` }}
                 onClick={() => onSelectNode(node.id)}
               >
                 <div className="row-between">
@@ -103,7 +132,7 @@ export function LayersInspectorPanel({
                       </button>
                     )}
                     <span style={{ fontWeight: 600 }}>
-                      {isGroup ? '[G] ' : ''}
+                      {isGroup ? '[G] ' : node.kind === 'tile' ? '[T] ' : ''}
                       {node.name}
                     </span>
                   </div>
@@ -163,7 +192,7 @@ export function LayersInspectorPanel({
       </div>
 
       {selectedNode && (
-        <div className="panel-section" style={{ borderBottom: 'none' }} data-testid="inspector-panel">
+        <div className="panel-section" data-testid="inspector-panel">
           <div className="panel-heading">
             <span>Inspector</span>
             <div className="row-wrap">
@@ -173,7 +202,23 @@ export function LayersInspectorPanel({
                 data-testid="duplicate-node-btn"
                 onClick={() => onDuplicateNode(selectedNode.id)}
               >
-                Duplicate
+                Dup
+              </button>
+              <button
+                type="button"
+                className="studio-btn"
+                data-testid="duplicate-subtree-btn"
+                onClick={() => onDuplicateSubtree(selectedNode.id)}
+              >
+                Dup Subtree
+              </button>
+              <button
+                type="button"
+                className="studio-btn"
+                data-testid="export-rig-btn"
+                onClick={() => onExportRigPackage(selectedNode.id)}
+              >
+                Export Rig
               </button>
               {selectedNode.assetId && (
                 <button
@@ -207,26 +252,50 @@ export function LayersInspectorPanel({
             />
           </label>
 
-          <label className="field-label">
-            Parent
-            <select
-              className="studio-select"
-              data-testid="inspector-parent-select"
-              value={selectedNode.parentId ?? ''}
-              onChange={(e) =>
-                onChangeParent(selectedNode.id, e.target.value === '' ? null : e.target.value)
-              }
+          <div className="row-between">
+            <label className="field-label" style={{ flex: 1 }}>
+              Parent
+              <select
+                className="studio-select"
+                data-testid="inspector-parent-select"
+                value={selectedNode.parentId ?? ''}
+                onChange={(e) =>
+                  onChangeParent(
+                    selectedNode.id,
+                    e.target.value === '' ? null : e.target.value,
+                    preserveWorld,
+                  )
+                }
+              >
+                <option value="">(Stage Root)</option>
+                {nodes
+                  .filter((n) => n.id !== selectedNode.id)
+                  .map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 11,
+                color: '#9aa6b8',
+                paddingTop: 14,
+              }}
             >
-              <option value="">(Stage Root)</option>
-              {nodes
-                .filter((n) => n.id !== selectedNode.id)
-                .map((n) => (
-                  <option key={n.id} value={n.id}>
-                    {n.name}
-                  </option>
-                ))}
-            </select>
-          </label>
+              <input
+                type="checkbox"
+                data-testid="preserve-world-toggle"
+                checked={preserveWorld}
+                onChange={(e) => setPreserveWorld(e.target.checked)}
+              />
+              Preserve World
+            </label>
+          </div>
 
           <div className="grid-2">
             <label className="field-label">
@@ -323,10 +392,29 @@ export function LayersInspectorPanel({
                 type="number"
                 step="1"
                 className="studio-input"
+                data-testid="inspector-pivotx-input"
                 value={selectedNode.transform.pivotX}
                 onChange={(e) => {
                   const val = Number(e.target.value);
-                  if (Number.isFinite(val)) onChangeTransform(selectedNode.id, { pivotX: val });
+                  if (Number.isFinite(val)) {
+                    onChangePivot(selectedNode.id, val, selectedNode.transform.pivotY, preserveWorld);
+                  }
+                }}
+              />
+            </label>
+            <label className="field-label">
+              Pivot Y
+              <input
+                type="number"
+                step="1"
+                className="studio-input"
+                data-testid="inspector-pivoty-input"
+                value={selectedNode.transform.pivotY}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  if (Number.isFinite(val)) {
+                    onChangePivot(selectedNode.id, selectedNode.transform.pivotX, val, preserveWorld);
+                  }
                 }}
               />
             </label>
@@ -348,8 +436,179 @@ export function LayersInspectorPanel({
               />
             </label>
           </div>
+
+          {selectedNode.kind === 'tile' && selectedNode.tile && (
+            <div style={{ marginTop: 8 }}>
+              <div className="panel-heading" style={{ marginBottom: 6 }}>
+                <span>Tile Layer</span>
+              </div>
+              <div className="grid-2">
+                <label className="field-label">
+                  Tile Width
+                  <input
+                    type="number"
+                    min="1"
+                    className="studio-input"
+                    data-testid="tile-width-input"
+                    value={selectedNode.tile.width}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (val > 0) onChangeTileParams(selectedNode.id, { width: val });
+                    }}
+                  />
+                </label>
+                <label className="field-label">
+                  Tile Height
+                  <input
+                    type="number"
+                    min="1"
+                    className="studio-input"
+                    data-testid="tile-height-input"
+                    value={selectedNode.tile.height}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      if (val > 0) onChangeTileParams(selectedNode.id, { height: val });
+                    }}
+                  />
+                </label>
+                <label className="field-label">
+                  Offset X
+                  <input
+                    type="number"
+                    className="studio-input"
+                    data-testid="tile-offset-x-input"
+                    value={selectedNode.tile.offsetX}
+                    onChange={(e) =>
+                      onChangeTileParams(selectedNode.id, { offsetX: Number(e.target.value) || 0 })
+                    }
+                  />
+                </label>
+                <label className="field-label">
+                  Offset Y
+                  <input
+                    type="number"
+                    className="studio-input"
+                    data-testid="tile-offset-y-input"
+                    value={selectedNode.tile.offsetY}
+                    onChange={(e) =>
+                      onChangeTileParams(selectedNode.id, { offsetY: Number(e.target.value) || 0 })
+                    }
+                  />
+                </label>
+              </div>
+              <div className="row-wrap" style={{ marginTop: 6 }}>
+                <label style={{ fontSize: 11 }}>
+                  <input
+                    type="checkbox"
+                    data-testid="tile-repeat-x"
+                    checked={selectedNode.tile.repeatX}
+                    onChange={(e) =>
+                      onChangeTileParams(selectedNode.id, { repeatX: e.target.checked })
+                    }
+                  />{' '}
+                  Repeat X
+                </label>
+                <label style={{ fontSize: 11 }}>
+                  <input
+                    type="checkbox"
+                    data-testid="tile-repeat-y"
+                    checked={selectedNode.tile.repeatY}
+                    onChange={(e) =>
+                      onChangeTileParams(selectedNode.id, { repeatY: e.target.checked })
+                    }
+                  />{' '}
+                  Repeat Y
+                </label>
+                <label style={{ fontSize: 11 }}>
+                  <input
+                    type="checkbox"
+                    data-testid="tile-mirror-x"
+                    checked={selectedNode.tile.mirrorX}
+                    onChange={(e) =>
+                      onChangeTileParams(selectedNode.id, { mirrorX: e.target.checked })
+                    }
+                  />{' '}
+                  Mirror X
+                </label>
+                <label style={{ fontSize: 11 }}>
+                  <input
+                    type="checkbox"
+                    data-testid="tile-mirror-y"
+                    checked={selectedNode.tile.mirrorY}
+                    onChange={(e) =>
+                      onChangeTileParams(selectedNode.id, { mirrorY: e.target.checked })
+                    }
+                  />{' '}
+                  Mirror Y
+                </label>
+              </div>
+            </div>
+          )}
         </div>
       )}
+
+      <div className="panel-section" style={{ borderBottom: 'none' }} data-testid="camera-panel">
+        <div className="panel-heading">
+          <span>Shot Camera</span>
+          <button
+            type="button"
+            className="studio-btn"
+            data-testid="camera-reset-btn"
+            onClick={() =>
+              onChangeCamera({
+                x: shot.width / 2,
+                y: shot.height / 2,
+                zoom: 1,
+              })
+            }
+          >
+            Reset
+          </button>
+        </div>
+        <div className="grid-2">
+          <label className="field-label">
+            Cam X
+            <input
+              type="number"
+              className="studio-input"
+              data-testid="camera-x-input"
+              value={shot.camera.x}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                if (Number.isFinite(val)) onChangeCamera({ x: val });
+              }}
+            />
+          </label>
+          <label className="field-label">
+            Cam Y
+            <input
+              type="number"
+              className="studio-input"
+              data-testid="camera-y-input"
+              value={shot.camera.y}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                if (Number.isFinite(val)) onChangeCamera({ y: val });
+              }}
+            />
+          </label>
+          <label className="field-label">
+            Cam Zoom
+            <input
+              type="number"
+              min="0.1"
+              step="0.1"
+              className="studio-input"
+              data-testid="camera-zoom-input"
+              value={shot.camera.zoom}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                if (Number.isFinite(val) && val > 0) onChangeCamera({ zoom: val });
+              }}
+            />
+          </label>
+        </div>
+      </div>
     </aside>
   );
 }

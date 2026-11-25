@@ -1,19 +1,34 @@
 import { AppError } from './errors';
-import { validateTransform } from './math';
 import {
+  IDENTITY_AFFINE,
+  compensatePivotChange,
+  composeLocalMatrix,
+  decomposeAffineToTRS,
+  invertAffine,
+  multiplyAffine,
+  validateTransform,
+  type Affine2D,
+} from './math';
+import {
+  AssetSchema,
   MaterialRecipeSchema,
   NodeEffectsSchema,
   NodeSchema,
   SourceSchema,
+  TileParamsSchema,
+  TrackSchema,
   TransformSchema,
   createBlankProject,
   defaultEffects,
+  type Asset,
   type Interpolation,
   type MaterialRecipe,
   type NodeEffects,
   type Project,
   type SceneNode,
   type SourceRecord,
+  type TileParams,
+  type Track,
   type TrackProperty,
   type TransformType,
 } from './schema';
@@ -117,6 +132,38 @@ export type Command =
       parentId: string | null;
     }
   | {
+      type: 'SET_NODE_PIVOT_PRESERVE_WORLD';
+      nodeId: string;
+      pivotX: number;
+      pivotY: number;
+      allowAnimated?: boolean;
+    }
+  | {
+      type: 'REPARENT_NODE_PRESERVE_WORLD';
+      nodeId: string;
+      parentId: string | null;
+      allowAnimated?: boolean;
+    }
+  | {
+      type: 'DUPLICATE_SUBTREE';
+      rootNodeId: string;
+      idMap: Record<string, string>;
+      offsetX?: number;
+      offsetY?: number;
+    }
+  | {
+      type: 'SET_NODE_TILE_PARAMS';
+      nodeId: string;
+      tile: Partial<TileParams>;
+    }
+  | {
+      type: 'IMPORT_PACKAGE_PAYLOAD';
+      sources: SourceRecord[];
+      assets: Asset[];
+      nodes: SceneNode[];
+      tracks: Track[];
+    }
+  | {
       type: 'SET_NODE_TRANSFORM';
       nodeId: string;
       transform: Partial<TransformType>;
@@ -182,6 +229,61 @@ function assertNoCycle(nodes: Record<string, SceneNode>, nodeId: string, parentI
     }
     cursor = parent.parentId;
   }
+}
+
+export function hasAnimatedTransform(project: Project, nodeId: string): boolean {
+  for (const track of Object.values(project.tracks)) {
+    if (
+      track.targetKind === 'node' &&
+      track.targetId === nodeId &&
+      track.property.startsWith('transform.') &&
+      track.keys.length > 0
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function computeBaseWorldMatrix(nodes: Record<string, SceneNode>, nodeId: string): Affine2D {
+  const chain: SceneNode[] = [];
+  let cursor: string | null = nodeId;
+  const seen = new Set<string>();
+  while (cursor !== null) {
+    if (seen.has(cursor)) {
+      throw new AppError('ERR_CYCLE_DETECTED', `Cycle detected at "${cursor}".`);
+    }
+    seen.add(cursor);
+    const n: SceneNode | undefined = nodes[cursor];
+    if (!n) {
+      throw new AppError('ERR_MISSING_PARENT', `Node "${cursor}" does not exist.`);
+    }
+    chain.push(n);
+    cursor = n.parentId;
+  }
+  let m = IDENTITY_AFFINE;
+  for (let i = chain.length - 1; i >= 0; i -= 1) {
+    m = multiplyAffine(m, composeLocalMatrix(chain[i]!.transform));
+  }
+  return m;
+}
+
+export function collectSubtreeNodeIds(project: Project, rootNodeId: string): string[] {
+  if (!project.nodes[rootNodeId]) {
+    throw new AppError('ERR_INVALID_COMMAND', `Unknown root node "${rootNodeId}".`);
+  }
+  const result: string[] = [];
+  const visit = (id: string) => {
+    result.push(id);
+    const children = Object.values(project.nodes)
+      .filter((n) => n.parentId === id)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    for (const child of children) {
+      visit(child.id);
+    }
+  };
+  visit(rootNodeId);
+  return result;
 }
 
 export function applyCommand(project: Project, command: Command): Project {
@@ -436,6 +538,120 @@ export function applyCommand(project: Project, command: Command): Project {
       node.parentId = command.parentId;
       break;
     }
+    case 'SET_NODE_PIVOT_PRESERVE_WORLD': {
+      const node = next.nodes[command.nodeId];
+      if (!node) {
+        throw new AppError('ERR_INVALID_COMMAND', `Unknown node "${command.nodeId}".`);
+      }
+      if (!command.allowAnimated && hasAnimatedTransform(next, command.nodeId)) {
+        throw new AppError(
+          'ERR_ANIMATED_TRANSFORM_LOCKED',
+          `Cannot preserve-world change pivot on animated node "${command.nodeId}" without explicit override.`,
+          { nodeId: command.nodeId },
+        );
+      }
+      const nextTransform = compensatePivotChange(node.transform, command.pivotX, command.pivotY);
+      validateTransform(nextTransform);
+      node.transform = nextTransform;
+      break;
+    }
+    case 'REPARENT_NODE_PRESERVE_WORLD': {
+      const node = next.nodes[command.nodeId];
+      if (!node) {
+        throw new AppError('ERR_INVALID_COMMAND', `Unknown node "${command.nodeId}".`);
+      }
+      assertNoCycle(next.nodes, command.nodeId, command.parentId);
+      if (!command.allowAnimated && hasAnimatedTransform(next, command.nodeId)) {
+        throw new AppError(
+          'ERR_ANIMATED_TRANSFORM_LOCKED',
+          `Cannot preserve-world reparent animated node "${command.nodeId}" without explicit override.`,
+          { nodeId: command.nodeId },
+        );
+      }
+      const nodeWorld = computeBaseWorldMatrix(next.nodes, command.nodeId);
+      const newParentWorld =
+        command.parentId !== null
+          ? computeBaseWorldMatrix(next.nodes, command.parentId)
+          : IDENTITY_AFFINE;
+      const desiredLocal = multiplyAffine(invertAffine(newParentWorld), nodeWorld);
+      const decomposed = decomposeAffineToTRS(
+        desiredLocal,
+        node.transform.pivotX,
+        node.transform.pivotY,
+        Math.sign(node.transform.sx) || 1,
+      );
+      node.parentId = command.parentId;
+      node.transform = decomposed;
+      break;
+    }
+    case 'DUPLICATE_SUBTREE': {
+      const subtreeIds = collectSubtreeNodeIds(next, command.rootNodeId);
+      const maxOrder = Object.values(next.nodes).reduce(
+        (max, n) => Math.max(max, n.drawOrder),
+        0,
+      );
+      const minSubtreeOrder = subtreeIds.reduce(
+        (min, id) => Math.min(min, next.nodes[id]!.drawOrder),
+        Infinity,
+      );
+      const orderShift = maxOrder - minSubtreeOrder + 1;
+
+      for (const oldId of subtreeIds) {
+        const newId = command.idMap[oldId];
+        if (!newId || next.nodes[newId]) {
+          throw new AppError(
+            'ERR_INVALID_COMMAND',
+            `Invalid or colliding target ID "${newId ?? ''}" for subtree duplication.`,
+          );
+        }
+      }
+
+      for (const oldId of subtreeIds) {
+        const orig = next.nodes[oldId]!;
+        const newId = command.idMap[oldId]!;
+        const copy = structuredClone(orig);
+        copy.id = newId;
+        copy.name = oldId === command.rootNodeId ? `${orig.name} Copy` : orig.name;
+        copy.drawOrder = orig.drawOrder + orderShift;
+        if (oldId === command.rootNodeId) {
+          copy.parentId = orig.parentId;
+          copy.transform.x += command.offsetX ?? 24;
+          copy.transform.y += command.offsetY ?? 24;
+        } else {
+          copy.parentId = orig.parentId ? (command.idMap[orig.parentId] ?? orig.parentId) : null;
+        }
+        next.nodes[newId] = copy;
+      }
+      break;
+    }
+    case 'SET_NODE_TILE_PARAMS': {
+      const node = next.nodes[command.nodeId];
+      if (!node || node.kind !== 'tile' || !node.tile) {
+        throw new AppError('ERR_INVALID_COMMAND', `Node "${command.nodeId}" is not a tile layer.`);
+      }
+      node.tile = TileParamsSchema.parse({ ...node.tile, ...command.tile });
+      break;
+    }
+    case 'IMPORT_PACKAGE_PAYLOAD': {
+      for (const src of command.sources) {
+        const parsed = SourceSchema.parse(src);
+        next.sources[parsed.id] = parsed;
+      }
+      for (const asset of command.assets) {
+        const parsed = AssetSchema.parse(asset);
+        next.assets[parsed.id] = parsed;
+      }
+      for (const node of command.nodes) {
+        const parsed = NodeSchema.parse(node);
+        validateTransform(parsed.transform);
+        next.nodes[parsed.id] = parsed;
+      }
+      for (const track of command.tracks) {
+        const parsed = TrackSchema.parse(track);
+        next.tracks[parsed.id] = parsed;
+      }
+      break;
+    }
     case 'SET_NODE_TRANSFORM': {
       const node = next.nodes[command.nodeId];
       if (!node) {
@@ -546,12 +762,13 @@ export function applyCommand(project: Project, command: Command): Project {
 export function createDefaultNode(params: {
   id: string;
   name: string;
-  kind: 'group' | 'sprite';
+  kind: 'group' | 'sprite' | 'tile';
   parentId?: string | null;
   assetId?: string;
   x?: number;
   y?: number;
   drawOrder?: number;
+  tile?: TileParams;
 }): SceneNode {
   return {
     id: params.id,
@@ -573,5 +790,6 @@ export function createDefaultNode(params: {
     locked: false,
     drawOrder: params.drawOrder ?? 0,
     effects: defaultEffects(),
+    ...(params.tile ? { tile: params.tile } : {}),
   };
 }

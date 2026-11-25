@@ -22,6 +22,8 @@ export type FixtureId =
   | 'F09_EXPORT_CLOCK'
   | 'F02_HIDDEN_TORSO'
   | 'F03_PAPER_RECIPE'
+  | 'F04_JOINTED_PUPPET'
+  | 'F06_PARALLAX'
   | 'F08_ARCHIVE';
 
 export interface LoadedFixture {
@@ -788,6 +790,270 @@ export function buildF08ArchiveProject(): LoadedFixture {
   return base;
 }
 
+export function buildF04JointedPuppet(): LoadedFixture {
+  const blobs = new Map<string, BlobRecord>();
+  const torsoImg = createSolidSquare(60, 80, [200, 50, 50, 255]);
+  const upperImg = createSolidSquare(44, 16, [40, 190, 70, 255]);
+  const foreImg = createSolidSquare(40, 14, [240, 210, 40, 255]);
+  const handImg = createSolidSquare(18, 18, [50, 130, 240, 255]);
+
+  blobs.set('blob-f04-torso', makeBlob('blob-f04-torso', torsoImg));
+  blobs.set('blob-f04-upper', makeBlob('blob-f04-upper', upperImg));
+  blobs.set('blob-f04-fore', makeBlob('blob-f04-fore', foreImg));
+  blobs.set('blob-f04-hand', makeBlob('blob-f04-hand', handImg));
+
+  const project = createBlankProject({
+    id: 'proj-f04-puppet',
+    name: 'F04 Jointed Puppet',
+    width: 320,
+    height: 180,
+    background: { color: '#10141e', alpha: 0 },
+  });
+
+  project.assets = {
+    'asset-f04-torso': {
+      id: 'asset-f04-torso',
+      name: 'Torso',
+      kind: 'synthetic-rgba',
+      width: 60,
+      height: 80,
+      anchorX: 30,
+      anchorY: 40,
+      blobId: 'blob-f04-torso',
+      revision: 1,
+    },
+    'asset-f04-upper': {
+      id: 'asset-f04-upper',
+      name: 'Upper Arm',
+      kind: 'synthetic-rgba',
+      width: 44,
+      height: 16,
+      anchorX: 22,
+      anchorY: 8,
+      blobId: 'blob-f04-upper',
+      revision: 1,
+    },
+    'asset-f04-fore': {
+      id: 'asset-f04-fore',
+      name: 'Forearm',
+      kind: 'synthetic-rgba',
+      width: 40,
+      height: 14,
+      anchorX: 20,
+      anchorY: 7,
+      blobId: 'blob-f04-fore',
+      revision: 1,
+    },
+    'asset-f04-hand': {
+      id: 'asset-f04-hand',
+      name: 'Hand',
+      kind: 'synthetic-rgba',
+      width: 18,
+      height: 18,
+      anchorX: 9,
+      anchorY: 9,
+      blobId: 'blob-f04-hand',
+      revision: 1,
+    },
+  };
+
+  project.nodes = {
+    'puppet-root': {
+      id: 'puppet-root',
+      name: 'Puppet Root',
+      kind: 'group',
+      parentId: null,
+      transform: { x: 150, y: 90, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 1,
+      effects: defaultEffects(),
+    },
+    torso: {
+      id: 'torso',
+      name: 'Torso',
+      kind: 'sprite',
+      parentId: 'puppet-root',
+      assetId: 'asset-f04-torso',
+      transform: { x: 0, y: 0, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 20,
+      effects: defaultEffects(),
+    },
+    'upper-arm': {
+      id: 'upper-arm',
+      name: 'Upper Arm',
+      kind: 'sprite',
+      parentId: 'torso',
+      assetId: 'asset-f04-upper',
+      transform: { x: 20, y: -15, angle: 0, sx: 1, sy: 1, pivotX: -16, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 10,
+      effects: defaultEffects(),
+    },
+    forearm: {
+      id: 'forearm',
+      name: 'Forearm',
+      kind: 'sprite',
+      parentId: 'upper-arm',
+      assetId: 'asset-f04-fore',
+      transform: { x: 16, y: 0, angle: 0, sx: 1, sy: 1, pivotX: -14, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 30,
+      effects: defaultEffects(),
+    },
+    hand: {
+      id: 'hand',
+      name: 'Hand',
+      kind: 'sprite',
+      parentId: 'forearm',
+      assetId: 'asset-f04-hand',
+      transform: { x: 18, y: 0, angle: 0, sx: -1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 35,
+      effects: defaultEffects(),
+    },
+  };
+
+  return { project, blobs };
+}
+
+export function buildF06Parallax(): LoadedFixture {
+  const blobs = new Map<string, BlobRecord>();
+  const tileImg = createTilePattern(48, 32);
+  const fgImg = createSolidSquare(32, 24, [190, 80, 160, 255]);
+  blobs.set('blob-f06-tile', makeBlob('blob-f06-tile', tileImg));
+  blobs.set('blob-f06-fg', makeBlob('blob-f06-fg', fgImg));
+
+  const project = createBlankProject({
+    id: 'proj-f06-parallax',
+    name: 'F06 Parallax',
+    width: 320,
+    height: 180,
+    background: { color: '#10141e', alpha: 0 },
+  });
+
+  project.assets = {
+    'asset-f06-tile': {
+      id: 'asset-f06-tile',
+      name: 'Asymmetric Tile',
+      kind: 'synthetic-rgba',
+      width: 48,
+      height: 32,
+      anchorX: 0,
+      anchorY: 0,
+      blobId: 'blob-f06-tile',
+      revision: 1,
+    },
+    'asset-f06-fg': {
+      id: 'asset-f06-fg',
+      name: 'FG Tile',
+      kind: 'synthetic-rgba',
+      width: 32,
+      height: 24,
+      anchorX: 0,
+      anchorY: 0,
+      blobId: 'blob-f06-fg',
+      revision: 1,
+    },
+  };
+
+  project.nodes = {
+    'sky-tiles': {
+      id: 'sky-tiles',
+      name: 'Sky Mirrored Tiles',
+      kind: 'tile',
+      parentId: null,
+      assetId: 'asset-f06-tile',
+      transform: { x: 0, y: 0, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 0,
+      effects: defaultEffects(),
+      tile: {
+        width: 320,
+        height: 80,
+        scaleX: 1,
+        scaleY: 1,
+        offsetX: -14,
+        offsetY: -6,
+        scrollRateX: 0,
+        scrollRateY: 0,
+        repeatX: true,
+        repeatY: true,
+        mirrorX: true,
+        mirrorY: false,
+      },
+    },
+    'hills-tiles': {
+      id: 'hills-tiles',
+      name: 'Hills Single Row',
+      kind: 'tile',
+      parentId: null,
+      assetId: 'asset-f06-tile',
+      transform: { x: 0, y: 80, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 10,
+      effects: defaultEffects(),
+      tile: {
+        width: 320,
+        height: 100,
+        scaleX: 1,
+        scaleY: 1,
+        offsetX: -35,
+        offsetY: 0,
+        scrollRateX: 0,
+        scrollRateY: 0,
+        repeatX: true,
+        repeatY: false,
+        mirrorX: false,
+        mirrorY: false,
+      },
+    },
+    'fg-tiles': {
+      id: 'fg-tiles',
+      name: 'FG Scaled Tiles',
+      kind: 'tile',
+      parentId: null,
+      assetId: 'asset-f06-fg',
+      transform: { x: 0, y: 140, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: 20,
+      effects: defaultEffects(),
+      tile: {
+        width: 160,
+        height: 40,
+        scaleX: 1.5,
+        scaleY: 1.5,
+        offsetX: -10,
+        offsetY: -5,
+        scrollRateX: 0,
+        scrollRateY: 0,
+        repeatX: true,
+        repeatY: true,
+        mirrorX: false,
+        mirrorY: false,
+      },
+    },
+  };
+
+  return { project, blobs };
+}
+
 export function loadFixtureById(id: string): LoadedFixture {
   switch (id) {
     case 'G0_DEMO':
@@ -798,6 +1064,10 @@ export function loadFixtureById(id: string): LoadedFixture {
       return buildF02HiddenTorso();
     case 'F03_PAPER_RECIPE':
       return buildF03PaperRecipe();
+    case 'F04_JOINTED_PUPPET':
+      return buildF04JointedPuppet();
+    case 'F06_PARALLAX':
+      return buildF06Parallax();
     case 'F08_ARCHIVE':
       return buildF08ArchiveProject();
     default:

@@ -13,6 +13,8 @@ interface AssetLibraryPanelProps {
   onEditAsset: (asset: Asset) => void;
   onUpdateSourceMeta: (sourceId: string, attribution: string, sourceUrl: string) => void;
   onAddAssetToStage: (assetId: string) => void;
+  onAddTileToStage: (assetId: string) => void;
+  onExportAssetPackage: (assetId: string) => void;
   onDeleteAsset: (assetId: string) => void;
 }
 
@@ -39,6 +41,8 @@ export function AssetLibraryPanel({
   onEditAsset,
   onUpdateSourceMeta,
   onAddAssetToStage,
+  onAddTileToStage,
+  onExportAssetPackage,
   onDeleteAsset,
 }: AssetLibraryPanelProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -135,6 +139,14 @@ export function AssetLibraryPanel({
                   >
                     Add to Stage
                   </button>
+                  <button
+                    type="button"
+                    className="studio-btn"
+                    data-testid="add-tile-to-stage-btn"
+                    onClick={() => onAddTileToStage(asset.id)}
+                  >
+                    + Tile
+                  </button>
                   {asset.kind !== 'synthetic-rgba' && (
                     <button
                       type="button"
@@ -145,6 +157,14 @@ export function AssetLibraryPanel({
                       Edit
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="studio-btn"
+                    data-testid="export-asset-pkg-btn"
+                    onClick={() => onExportAssetPackage(asset.id)}
+                  >
+                    Pkg
+                  </button>
                   <button
                     type="button"
                     className="studio-btn danger"

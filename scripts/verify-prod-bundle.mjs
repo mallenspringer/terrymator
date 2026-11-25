@@ -15,6 +15,8 @@ const forbiddenTokens = [
   'F09_EXPORT_CLOCK',
   'F02_HIDDEN_TORSO',
   'F03_PAPER_RECIPE',
+  'F04_JOINTED_PUPPET',
+  'F06_PARALLAX',
   'F08_ARCHIVE',
 ];
 const allowedUrlPrefixes = [
