@@ -23,7 +23,7 @@ npx playwright install chromium
 
 | Command | Purpose |
 |---|---|
-| `npm run dev` | Local Vite dev server with G0 feasibility shell & test harness |
+| `npm run dev` | Local Vite dev server with Terrymator Studio & test harness |
 | `npm run build` | Production build (`dist/`), test harness excluded |
 | `npm run typecheck` | Strict TypeScript checks (`tsc --noEmit`) |
 | `npm run lint` | ESLint flat config checks |
@@ -35,7 +35,7 @@ npx playwright install chromium
 | `npm run test:browser:edge` | Playwright local Microsoft Edge channel tests |
 | `npm run test:e2e` | Playwright UI shell E2E tests |
 | `npm run test:replay` | Vitest deterministic command-log replay tests |
-| `npm run test:bench` | Vitest G0 evaluation & archive smoke benchmark |
+| `npm run test:bench` | Vitest G0 smoke & F10 100-piece/5-rig baseline benchmarks |
 | `npm run verify:bundle` | Verify `dist/` excludes test harness & external hosts |
 | `npm run verify` | Full verification chain |
 

@@ -1,5 +1,12 @@
 import { useState } from 'react';
-import type { SamplingOverride, SceneNode, Shot, TileParams, TransformType } from '../domain/schema';
+import type {
+  NodeEffects,
+  SamplingOverride,
+  SceneNode,
+  Shot,
+  TileParams,
+  TransformType,
+} from '../domain/schema';
 
 interface LayersInspectorPanelProps {
   nodes: SceneNode[];
@@ -21,6 +28,9 @@ interface LayersInspectorPanelProps {
   onChangeParent: (nodeId: string, parentId: string | null, preserveWorld: boolean) => void;
   onChangeSampling: (nodeId: string, samplingOverride: SamplingOverride) => void;
   onChangeTileParams: (nodeId: string, patch: Partial<TileParams>) => void;
+  onChangeEffects: (nodeId: string, effects: NodeEffects) => void;
+  onBatchGroupEffects: (rootNodeId: string, effects: NodeEffects) => void;
+  onChangeGlobalShadowAngle: (angle: number) => void;
   onChangeCamera: (patch: { x?: number; y?: number; zoom?: number }) => void;
   onRenameNode: (nodeId: string, name: string) => void;
 }
@@ -58,6 +68,9 @@ export function LayersInspectorPanel({
   onChangeParent,
   onChangeSampling,
   onChangeTileParams,
+  onChangeEffects,
+  onBatchGroupEffects,
+  onChangeGlobalShadowAngle,
   onChangeCamera,
   onRenameNode,
 }: LayersInspectorPanelProps) {
@@ -591,6 +604,364 @@ export function LayersInspectorPanel({
               </div>
             </div>
           )}
+
+          <div
+            data-testid="inspector-effects-panel"
+            style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #242b38', display: 'flex', flexDirection: 'column', gap: 6 }}
+          >
+            <div className="row-between">
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#cbd5e1' }}>Visual Effects</span>
+              {selectedNode.kind === 'group' && (
+                <button
+                  type="button"
+                  className="studio-btn"
+                  data-testid="fx-batch-group-btn"
+                  onClick={() => onBatchGroupEffects(selectedNode.id, selectedNode.effects)}
+                >
+                  Apply FX to Descendants
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                <input
+                  type="checkbox"
+                  data-testid="fx-shadow-enabled"
+                  checked={selectedNode.effects.dropShadow.enabled}
+                  onChange={(e) =>
+                    onChangeEffects(selectedNode.id, {
+                      ...selectedNode.effects,
+                      dropShadow: { ...selectedNode.effects.dropShadow, enabled: e.target.checked },
+                    })
+                  }
+                />
+                Drop Shadow
+              </label>
+              {selectedNode.effects.dropShadow.enabled && (
+                <div className="grid-2">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, gridColumn: 'span 2' }}>
+                    <input
+                      type="checkbox"
+                      data-testid="fx-shadow-use-global"
+                      checked={selectedNode.effects.dropShadow.useGlobalAngle}
+                      onChange={(e) =>
+                        onChangeEffects(selectedNode.id, {
+                          ...selectedNode.effects,
+                          dropShadow: {
+                            ...selectedNode.effects.dropShadow,
+                            useGlobalAngle: e.target.checked,
+                          },
+                        })
+                      }
+                    />
+                    Use Global Angle ({shot.globalShadowAngle}°)
+                  </label>
+                  <label className="field-label">
+                    Angle
+                    <input
+                      type="number"
+                      className="studio-input"
+                      data-testid="fx-shadow-angle"
+                      disabled={selectedNode.effects.dropShadow.useGlobalAngle}
+                      value={selectedNode.effects.dropShadow.angle}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (Number.isFinite(val)) {
+                          onChangeEffects(selectedNode.id, {
+                            ...selectedNode.effects,
+                            dropShadow: { ...selectedNode.effects.dropShadow, angle: val },
+                          });
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="field-label">
+                    Distance
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      className="studio-input"
+                      data-testid="fx-shadow-distance"
+                      value={selectedNode.effects.dropShadow.distance}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (Number.isFinite(val)) {
+                          onChangeEffects(selectedNode.id, {
+                            ...selectedNode.effects,
+                            dropShadow: {
+                              ...selectedNode.effects.dropShadow,
+                              distance: Math.max(0, Math.min(100, val)),
+                            },
+                          });
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="field-label">
+                    Softness
+                    <input
+                      type="number"
+                      min="0"
+                      max="50"
+                      className="studio-input"
+                      data-testid="fx-shadow-softness"
+                      value={selectedNode.effects.dropShadow.softness}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (Number.isFinite(val)) {
+                          onChangeEffects(selectedNode.id, {
+                            ...selectedNode.effects,
+                            dropShadow: {
+                              ...selectedNode.effects.dropShadow,
+                              softness: Math.max(0, Math.min(50, val)),
+                            },
+                          });
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="field-label">
+                    Opacity
+                    <input
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      className="studio-input"
+                      data-testid="fx-shadow-opacity"
+                      value={selectedNode.effects.dropShadow.opacity}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (Number.isFinite(val)) {
+                          onChangeEffects(selectedNode.id, {
+                            ...selectedNode.effects,
+                            dropShadow: {
+                              ...selectedNode.effects.dropShadow,
+                              opacity: Math.max(0, Math.min(1, val)),
+                            },
+                          });
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="field-label">
+                    Shadow Color
+                    <input
+                      type="color"
+                      className="studio-input"
+                      data-testid="fx-shadow-color"
+                      value={selectedNode.effects.dropShadow.color}
+                      onChange={(e) =>
+                        onChangeEffects(selectedNode.id, {
+                          ...selectedNode.effects,
+                          dropShadow: { ...selectedNode.effects.dropShadow, color: e.target.value },
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                <input
+                  type="checkbox"
+                  data-testid="fx-glow-enabled"
+                  checked={selectedNode.effects.outerGlow.enabled}
+                  onChange={(e) =>
+                    onChangeEffects(selectedNode.id, {
+                      ...selectedNode.effects,
+                      outerGlow: { ...selectedNode.effects.outerGlow, enabled: e.target.checked },
+                    })
+                  }
+                />
+                Outer Glow
+              </label>
+              {selectedNode.effects.outerGlow.enabled && (
+                <div className="grid-2">
+                  <label className="field-label">
+                    Glow Color
+                    <input
+                      type="color"
+                      className="studio-input"
+                      data-testid="fx-glow-color"
+                      value={selectedNode.effects.outerGlow.color}
+                      onChange={(e) =>
+                        onChangeEffects(selectedNode.id, {
+                          ...selectedNode.effects,
+                          outerGlow: { ...selectedNode.effects.outerGlow, color: e.target.value },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="field-label">
+                    Radius
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      className="studio-input"
+                      data-testid="fx-glow-radius"
+                      value={selectedNode.effects.outerGlow.radius}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (Number.isFinite(val)) {
+                          onChangeEffects(selectedNode.id, {
+                            ...selectedNode.effects,
+                            outerGlow: {
+                              ...selectedNode.effects.outerGlow,
+                              radius: Math.max(0, Math.min(100, val)),
+                            },
+                          });
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="field-label">
+                    Intensity
+                    <input
+                      type="number"
+                      min="0"
+                      max="5"
+                      step="0.1"
+                      className="studio-input"
+                      data-testid="fx-glow-intensity"
+                      value={selectedNode.effects.outerGlow.intensity}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (Number.isFinite(val)) {
+                          onChangeEffects(selectedNode.id, {
+                            ...selectedNode.effects,
+                            outerGlow: {
+                              ...selectedNode.effects.outerGlow,
+                              intensity: Math.max(0, Math.min(5, val)),
+                            },
+                          });
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                <input
+                  type="checkbox"
+                  data-testid="fx-color-enabled"
+                  checked={selectedNode.effects.colorAdjust.enabled}
+                  onChange={(e) =>
+                    onChangeEffects(selectedNode.id, {
+                      ...selectedNode.effects,
+                      colorAdjust: {
+                        ...selectedNode.effects.colorAdjust,
+                        enabled: e.target.checked,
+                      },
+                    })
+                  }
+                />
+                Color Adjust
+              </label>
+              {selectedNode.effects.colorAdjust.enabled && (
+                <div className="grid-2">
+                  <label className="field-label">
+                    Tint
+                    <input
+                      type="color"
+                      className="studio-input"
+                      data-testid="fx-color-tint"
+                      value={selectedNode.effects.colorAdjust.tint}
+                      onChange={(e) =>
+                        onChangeEffects(selectedNode.id, {
+                          ...selectedNode.effects,
+                          colorAdjust: {
+                            ...selectedNode.effects.colorAdjust,
+                            tint: e.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="field-label">
+                    Tint Amount
+                    <input
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      className="studio-input"
+                      data-testid="fx-color-tint-amount"
+                      value={selectedNode.effects.colorAdjust.tintAmount}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (Number.isFinite(val)) {
+                          onChangeEffects(selectedNode.id, {
+                            ...selectedNode.effects,
+                            colorAdjust: {
+                              ...selectedNode.effects.colorAdjust,
+                              tintAmount: Math.max(0, Math.min(1, val)),
+                            },
+                          });
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="field-label">
+                    Brightness
+                    <input
+                      type="number"
+                      min="-1"
+                      max="1"
+                      step="0.05"
+                      className="studio-input"
+                      data-testid="fx-color-brightness"
+                      value={selectedNode.effects.colorAdjust.brightness}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (Number.isFinite(val)) {
+                          onChangeEffects(selectedNode.id, {
+                            ...selectedNode.effects,
+                            colorAdjust: {
+                              ...selectedNode.effects.colorAdjust,
+                              brightness: Math.max(-1, Math.min(1, val)),
+                            },
+                          });
+                        }
+                      }}
+                    />
+                  </label>
+                  <label className="field-label">
+                    Contrast
+                    <input
+                      type="number"
+                      min="-1"
+                      max="1"
+                      step="0.05"
+                      className="studio-input"
+                      data-testid="fx-color-contrast"
+                      value={selectedNode.effects.colorAdjust.contrast}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (Number.isFinite(val)) {
+                          onChangeEffects(selectedNode.id, {
+                            ...selectedNode.effects,
+                            colorAdjust: {
+                              ...selectedNode.effects.colorAdjust,
+                              contrast: Math.max(-1, Math.min(1, val)),
+                            },
+                          });
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -651,6 +1022,19 @@ export function LayersInspectorPanel({
               onChange={(e) => {
                 const val = Number(e.target.value);
                 if (Number.isFinite(val) && val > 0) onChangeCamera({ zoom: val });
+              }}
+            />
+          </label>
+          <label className="field-label">
+            Global Shadow °
+            <input
+              type="number"
+              className="studio-input"
+              data-testid="global-shadow-angle-input"
+              value={shot.globalShadowAngle}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                if (Number.isFinite(val)) onChangeGlobalShadowAngle(val);
               }}
             />
           </label>

@@ -18,7 +18,9 @@ const forbiddenTokens = [
   'F04_JOINTED_PUPPET',
   'F05_WALKING_LOOP',
   'F06_PARALLAX',
+  'F07_LIGHTING',
   'F08_ARCHIVE',
+  'F10_STRESS_SCENE',
 ];
 const allowedUrlPrefixes = [
   'http://www.w3.org/',

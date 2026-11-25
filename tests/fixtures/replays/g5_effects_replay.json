@@ -1,0 +1,76 @@
+{
+  "fixtureId": "F07_LIGHTING",
+  "commands": [
+    {
+      "type": "SET_GLOBAL_SHADOW_ANGLE",
+      "angle": 180
+    },
+    {
+      "type": "SET_NODE_EFFECTS",
+      "nodeId": "node-tint-glow",
+      "effects": {
+        "dropShadow": {
+          "enabled": true,
+          "color": "#000000",
+          "opacity": 0.8,
+          "distance": 15,
+          "softness": 2,
+          "useGlobalAngle": true,
+          "angle": 0
+        },
+        "outerGlow": {
+          "enabled": false,
+          "color": "#ff0000",
+          "intensity": 0,
+          "radius": 0
+        },
+        "colorAdjust": {
+          "enabled": true,
+          "tint": "#0000ff",
+          "tintAmount": 0.5,
+          "brightness": 0.1,
+          "contrast": 0.1
+        }
+      }
+    },
+    {
+      "type": "ADD_NODE",
+      "node": {
+        "id": "fx-group",
+        "name": "FX Group",
+        "kind": "group",
+        "parentId": null,
+        "transform": { "x": 0, "y": 0, "angle": 0, "sx": 1, "sy": 1, "pivotX": 0, "pivotY": 0 },
+        "opacity": 1,
+        "visible": true,
+        "locked": false,
+        "drawOrder": 50,
+        "effects": {
+          "dropShadow": { "enabled": false, "color": "#000000", "opacity": 0.5, "distance": 8, "softness": 4, "useGlobalAngle": true, "angle": 45 },
+          "outerGlow": { "enabled": false, "color": "#ffffff", "intensity": 0, "radius": 8 },
+          "colorAdjust": { "enabled": false, "tint": "#ffffff", "tintAmount": 0, "brightness": 0, "contrast": 0 }
+        }
+      }
+    },
+    {
+      "type": "SET_NODE_PARENT",
+      "nodeId": "node-global-shadow",
+      "parentId": "fx-group"
+    },
+    {
+      "type": "BATCH_SET_GROUP_EFFECTS",
+      "rootNodeId": "fx-group",
+      "effects": {
+        "dropShadow": { "enabled": true, "color": "#111111", "opacity": 0.6, "distance": 10, "softness": 3, "useGlobalAngle": true, "angle": 45 },
+        "outerGlow": { "enabled": true, "color": "#00ff88", "intensity": 1.2, "radius": 8 },
+        "colorAdjust": { "enabled": false, "tint": "#ffffff", "tintAmount": 0, "brightness": 0, "contrast": 0 }
+      }
+    }
+  ],
+  "checkpoints": [
+    {
+      "afterCommandIndex": 4,
+      "tick": 0
+    }
+  ]
+}

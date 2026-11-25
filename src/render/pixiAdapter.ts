@@ -103,7 +103,18 @@ function buildEffectsFilters(
       cm.contrast(effects.colorAdjust.contrast, true);
     }
     if (effects.colorAdjust.tintAmount > 0) {
-      cm.tint(parseHexColor(effects.colorAdjust.tint), true);
+      const hex = parseHexColor(effects.colorAdjust.tint);
+      const t = Math.max(0, Math.min(1, effects.colorAdjust.tintAmount));
+      const mr = 1 - t + t * (((hex >> 16) & 0xff) / 255);
+      const mg = 1 - t + t * (((hex >> 8) & 0xff) / 255);
+      const mb = 1 - t + t * ((hex & 0xff) / 255);
+      const m = cm.matrix;
+      for (let i = 0; i < 5; i += 1) {
+        m[i] = m[i]! * mr;
+        m[i + 5] = m[i + 5]! * mg;
+        m[i + 10] = m[i + 10]! * mb;
+      }
+      cm.matrix = m;
       cm.alpha = 1;
     }
     filters.push(cm);

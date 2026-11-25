@@ -25,7 +25,9 @@ export type FixtureId =
   | 'F04_JOINTED_PUPPET'
   | 'F05_WALKING_LOOP'
   | 'F06_PARALLAX'
-  | 'F08_ARCHIVE';
+  | 'F07_LIGHTING'
+  | 'F08_ARCHIVE'
+  | 'F10_STRESS_SCENE';
 
 export interface LoadedFixture {
   project: Project;
@@ -1344,6 +1346,279 @@ export function buildF05WalkingLoop(): LoadedFixture {
   return { project, blobs };
 }
 
+export function buildF07Lighting(): LoadedFixture {
+  const blobs = new Map<string, BlobRecord>();
+  const whiteImg = createSolidSquare(80, 80, [255, 255, 255, 255]);
+  blobs.set('blob-f07-white', makeBlob('blob-f07-white', whiteImg));
+
+  const project = createBlankProject({ name: 'F07 Lighting', width: 640, height: 360 });
+  project.id = 'proj-f07-lighting';
+  project.shot.durationTicks = 120_000;
+  project.shot.workRange = { inTick: 0, outTick: 120_000 };
+  project.shot.background = { color: '#f0f0f0', alpha: 1 };
+  project.shot.globalShadowAngle = 0;
+
+  project.assets['asset-f07-white'] = {
+    id: 'asset-f07-white',
+    name: 'White Block',
+    kind: 'cutout',
+    sourceId: 'src-f07',
+    editRect: { x: 0, y: 0, width: 80, height: 80 },
+    maskBlobId: null,
+    overlayBlobId: null,
+    width: 80,
+    height: 80,
+    anchorX: 40,
+    anchorY: 40,
+    revision: 1,
+  };
+  project.sources['src-f07'] = {
+    id: 'src-f07',
+    name: 'White Sheet',
+    blobId: 'blob-f07-white',
+    sha256: blobs.get('blob-f07-white')!.sha256,
+    mimeType: 'image/png',
+    width: 80,
+    height: 80,
+    attribution: '',
+    sourceUrl: '',
+  };
+
+  const globalFx = defaultEffects();
+  globalFx.dropShadow = {
+    enabled: true,
+    color: '#000000',
+    opacity: 1,
+    distance: 20,
+    softness: 0,
+    useGlobalAngle: true,
+    angle: 0,
+  };
+
+  const overrideFx = defaultEffects();
+  overrideFx.dropShadow = {
+    enabled: true,
+    color: '#000000',
+    opacity: 1,
+    distance: 20,
+    softness: 0,
+    useGlobalAngle: false,
+    angle: 90,
+  };
+
+  const tintGlowFx = defaultEffects();
+  tintGlowFx.colorAdjust = {
+    enabled: true,
+    tint: '#00ff00',
+    tintAmount: 1,
+    brightness: 0,
+    contrast: 0,
+  };
+  tintGlowFx.outerGlow = {
+    enabled: true,
+    color: '#ff0000',
+    intensity: 2,
+    radius: 10,
+  };
+
+  project.nodes['node-global-shadow'] = {
+    id: 'node-global-shadow',
+    name: 'Global Shadow Box',
+    kind: 'sprite',
+    parentId: null,
+    assetId: 'asset-f07-white',
+    transform: { x: 150, y: 180, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+    opacity: 1,
+    visible: true,
+    locked: false,
+    drawOrder: 10,
+    effects: globalFx,
+  };
+
+  project.nodes['node-override-shadow'] = {
+    id: 'node-override-shadow',
+    name: 'Override Shadow Box',
+    kind: 'sprite',
+    parentId: null,
+    assetId: 'asset-f07-white',
+    transform: { x: 320, y: 180, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+    opacity: 1,
+    visible: true,
+    locked: false,
+    drawOrder: 20,
+    effects: overrideFx,
+  };
+
+  project.nodes['node-tint-glow'] = {
+    id: 'node-tint-glow',
+    name: 'Tint Glow Box',
+    kind: 'sprite',
+    parentId: null,
+    assetId: 'asset-f07-white',
+    transform: { x: 490, y: 180, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+    opacity: 1,
+    visible: true,
+    locked: false,
+    drawOrder: 30,
+    effects: tintGlowFx,
+  };
+
+  return { project, blobs };
+}
+
+export function buildF10StressScene(withEffects = true): LoadedFixture {
+  const blobs = new Map<string, BlobRecord>();
+  const project = createBlankProject({ name: 'F10 Stress Scene', width: 1920, height: 1080 });
+  project.id = 'proj-f10-stress';
+  project.shot.durationTicks = 30 * TICKS_PER_SECOND;
+  project.shot.workRange = { inTick: 0, outTick: 5 * TICKS_PER_SECOND };
+
+  const palette: Array<[number, number, number, number]> = [
+    [220, 80, 80, 255],
+    [80, 190, 110, 255],
+    [70, 140, 230, 255],
+    [230, 190, 60, 255],
+    [180, 100, 220, 255],
+  ];
+
+  for (let a = 0; a < palette.length; a += 1) {
+    const blobId = `blob-f10-${a}`;
+    const assetId = `asset-f10-${a}`;
+    const srcId = `src-f10-${a}`;
+    const img = createSolidSquare(64, 64, palette[a]!);
+    blobs.set(blobId, makeBlob(blobId, img));
+    project.sources[srcId] = {
+      id: srcId,
+      name: `Sheet ${a}`,
+      blobId,
+      sha256: blobs.get(blobId)!.sha256,
+      mimeType: 'image/png',
+      width: 64,
+      height: 64,
+      attribution: '',
+      sourceUrl: '',
+    };
+    project.assets[assetId] = {
+      id: assetId,
+      name: `Piece ${a}`,
+      kind: 'cutout',
+      sourceId: srcId,
+      editRect: { x: 0, y: 0, width: 64, height: 64 },
+      maskBlobId: null,
+      overlayBlobId: null,
+      width: 64,
+      height: 64,
+      anchorX: 32,
+      anchorY: 32,
+      revision: 1,
+    };
+  }
+
+  let drawOrder = 1;
+  for (let r = 0; r < 5; r += 1) {
+    const rigId = `rig-${r}`;
+    const rigX = 280 + r * 340;
+    const rigY = 540;
+    project.nodes[rigId] = {
+      id: rigId,
+      name: `Rig ${r}`,
+      kind: 'group',
+      parentId: null,
+      transform: { x: rigX, y: rigY, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+      opacity: 1,
+      visible: true,
+      locked: false,
+      drawOrder: drawOrder++,
+      effects: defaultEffects(),
+    };
+
+    project.tracks[`trk-${rigId}-x`] = {
+      id: `trk-${rigId}-x`,
+      targetKind: 'node',
+      targetId: rigId,
+      property: 'transform.x',
+      keys: [
+        { tick: 0, value: rigX, interpolation: 'linear' },
+        { tick: project.shot.durationTicks, value: rigX + 120, interpolation: 'linear' },
+      ],
+    };
+
+    for (let p = 0; p < 20; p += 1) {
+      const nodeId = `rig-${r}-piece-${p}`;
+      const parentId = p === 0 ? rigId : p < 5 ? `rig-${r}-piece-0` : `rig-${r}-piece-${p % 5}`;
+      const fx = defaultEffects();
+      if (withEffects) {
+        if (p % 2 === 0) {
+          fx.dropShadow = {
+            enabled: true,
+            color: '#000000',
+            opacity: 0.45,
+            distance: 6,
+            softness: 3,
+            useGlobalAngle: true,
+            angle: 45,
+          };
+        }
+        if (p % 3 === 0) {
+          fx.colorAdjust = {
+            enabled: true,
+            tint: '#ffd166',
+            tintAmount: 0.25,
+            brightness: 0.05,
+            contrast: 0.05,
+          };
+        }
+        if (p % 5 === 0) {
+          fx.outerGlow = {
+            enabled: true,
+            color: '#06d6a0',
+            intensity: 1,
+            radius: 6,
+          };
+        }
+      }
+
+      project.nodes[nodeId] = {
+        id: nodeId,
+        name: `Rig ${r} Piece ${p}`,
+        kind: 'sprite',
+        parentId,
+        assetId: `asset-f10-${(r + p) % 5}`,
+        transform: {
+          x: ((p % 5) - 2) * 32,
+          y: (Math.floor(p / 5) - 2) * 36,
+          angle: 0,
+          sx: 0.9,
+          sy: 0.9,
+          pivotX: 0,
+          pivotY: -16,
+        },
+        opacity: 1,
+        visible: true,
+        locked: false,
+        drawOrder: drawOrder++,
+        effects: fx,
+      };
+
+      if (p % 4 === 0) {
+        project.tracks[`trk-${nodeId}-angle`] = {
+          id: `trk-${nodeId}-angle`,
+          targetKind: 'node',
+          targetId: nodeId,
+          property: 'transform.angle',
+          keys: [
+            { tick: 0, value: -15, interpolation: 'smooth' },
+            { tick: project.shot.durationTicks / 2, value: 15, interpolation: 'smooth' },
+            { tick: project.shot.durationTicks, value: -15, interpolation: 'linear' },
+          ],
+        };
+      }
+    }
+  }
+
+  return { project, blobs };
+}
+
 export function loadFixtureById(id: string): LoadedFixture {
   switch (id) {
     case 'G0_DEMO':
@@ -1360,8 +1635,12 @@ export function loadFixtureById(id: string): LoadedFixture {
       return buildF05WalkingLoop();
     case 'F06_PARALLAX':
       return buildF06Parallax();
+    case 'F07_LIGHTING':
+      return buildF07Lighting();
     case 'F08_ARCHIVE':
       return buildF08ArchiveProject();
+    case 'F10_STRESS_SCENE':
+      return buildF10StressScene(true);
     default:
       throw new AppError('ERR_UNKNOWN_FIXTURE', `Unknown fixture ID: "${id}".`);
   }

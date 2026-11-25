@@ -72,3 +72,17 @@ All runtime and test dependencies are pinned to exact versions in `package.json`
 
 ### 15. Manual-Key Pending Draft Workflow
 - When Auto-Key is OFF, editing an already-tracked property stages a transient `PendingDraft` (`src/ui/draftState.ts`) overlaid onto `previewProject` for live viewport feedback without mutating committed `ProjectStore` state; time scrubbing/stepping, playback, and saving are guarded with `ERR_PENDING_DRAFT` until the user clicks `Key Drafts` or `Discard Drafts`.
+
+## 2026-11-25 — Gate G5
+
+### 16. Linear `tintAmount` Matrix Blending
+- Pixi's `ColorMatrixFilter.tint(color, true)` applies 100% tint regardless of `tintAmount`. `buildEffectsFilters()` in `src/render/pixiAdapter.ts` now scales the first three rows of the active `ColorMatrixFilter` matrix by `1 - t + t * channel` (`t = clamp(tintAmount, 0, 1)`), preserving alpha (`matrix[18] = 1`) and avoiding filter accumulation.
+
+### 17. Isolated Disposable Export Renderer in `ExportModal`
+- `ExportModal.tsx` probes WebGL and WebCodecs capabilities via `probeWebGlCapabilities()` + `probeExportCapabilities()`, enforces `AbortController` cancellation, and creates a dedicated `PixiStageRenderer` per export job that is always disposed in a `finally` block so the interactive stage viewport is never disturbed or leaked.
+
+### 18. Group Batch Effects & Global Shadow Angle Commands
+- Added `SET_GLOBAL_SHADOW_ANGLE` and `BATCH_SET_GROUP_EFFECTS` to `src/domain/commands.ts` (using `collectSubtreeNodeIds` and `NodeEffectsSchema.parse`) so lighting changes and group-wide FX propagation are undoable, replayable, and deterministic.
+
+### 19. Deterministic Fixture Project IDs
+- `buildF07Lighting()` and `buildF10StressScene()` in `src/test-harness/fixtures.ts` assign fixed `project.id` values (`proj-f07-lighting`, `proj-f10-stress`) so replay and benchmark runs produce identical snapshot hashes across independent invocations.

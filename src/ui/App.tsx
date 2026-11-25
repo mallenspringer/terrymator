@@ -11,6 +11,7 @@ import {
   type CutoutAsset,
   type MaterialAsset,
   type MaterialRecipe,
+  type NodeEffects,
   type Project,
   type TileParams,
   type TrackProperty,
@@ -36,6 +37,7 @@ import {
   upsertPendingDraft,
   type PendingDraft,
 } from './draftState';
+import { ExportModal } from './ExportModal';
 import { LayersInspectorPanel } from './LayersInspectorPanel';
 import { MaterialWorkshopWorkspace } from './MaterialWorkshopWorkspace';
 import { StageViewport } from './StageViewport';
@@ -75,6 +77,7 @@ export function App() {
     message: string;
     onConfirm: () => void;
   } | null>(null);
+  const [showExportModal, setShowExportModal] = useState<boolean>(false);
 
   useEffect(() => {
     const unsub = store.subscribe(() => {
@@ -170,8 +173,21 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (confirmState) {
+          setConfirmState(null);
+          return;
+        }
+        if (showExportModal) {
+          setShowExportModal(false);
+          return;
+        }
+      }
       const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')
+      ) {
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
@@ -187,11 +203,61 @@ export function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         void handleSaveArchive();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'e') {
+        e.preventDefault();
+        if (pendingDrafts.length === 0) {
+          setIsPlaying(false);
+          setShowExportModal(true);
+        } else {
+          setErrorMsg('ERR_PENDING_DRAFT: Key or discard pending drafts before exporting.');
+        }
+      } else if (workspace === 'studio' && !showExportModal && !confirmState) {
+        if (e.code === 'Space') {
+          e.preventDefault();
+          if (pendingDrafts.length === 0) {
+            setIsPlaying((p) => !p);
+          } else {
+            setErrorMsg('ERR_PENDING_DRAFT: Key or discard pending drafts before changing timeline time.');
+          }
+        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          e.preventDefault();
+          if (pendingDrafts.length > 0) {
+            setErrorMsg('ERR_PENDING_DRAFT: Key or discard pending drafts before changing timeline time.');
+            return;
+          }
+          setIsPlaying(false);
+          const fps = project.shot.fps;
+          const tpf = (TICKS_PER_SECOND * fps.den) / fps.num;
+          const curFrame = Math.round(currentTick / tpf);
+          const nextFrame = Math.max(0, curFrame + (e.key === 'ArrowRight' ? 1 : -1));
+          setCurrentTick(
+            Math.min(project.shot.durationTicks - 1, frameIndexToTick(0, nextFrame, fps)),
+          );
+        } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNodeId) {
+          e.preventDefault();
+          try {
+            store.dispatch({ type: 'DELETE_NODE', nodeId: selectedNodeId });
+            setSelectedNodeId(null);
+          } catch (err) {
+            setErrorMsg(isAppError(err) ? `${err.code}: ${err.message}` : String(err));
+          }
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleSaveArchive, store]);
+  }, [
+    confirmState,
+    currentTick,
+    handleSaveArchive,
+    pendingDrafts.length,
+    project.shot.durationTicks,
+    project.shot.fps,
+    selectedNodeId,
+    showExportModal,
+    store,
+    workspace,
+  ]);
 
   const runCommand = (fn: () => void) => {
     try {
@@ -571,6 +637,19 @@ export function App() {
             </button>
           </>
         )}
+        <div className="toolbar-sep" />
+        <button
+          type="button"
+          className="studio-btn primary"
+          data-testid="open-export-btn"
+          onClick={() => {
+            if (!guardNoPendingDrafts()) return;
+            setIsPlaying(false);
+            setShowExportModal(true);
+          }}
+        >
+          Export...
+        </button>
       </header>
 
       {recoveryInfo && (
@@ -948,6 +1027,27 @@ export function App() {
                 store.dispatch({ type: 'SET_NODE_TILE_PARAMS', nodeId, tile: patch });
               })
             }
+            onChangeEffects={(nodeId, effects: NodeEffects) =>
+              runCommand(() => {
+                store.dispatch(
+                  { type: 'SET_NODE_EFFECTS', nodeId, effects },
+                  { label: 'Update effects', coalesceKey: `fx-${nodeId}` },
+                );
+              })
+            }
+            onBatchGroupEffects={(rootNodeId, effects: NodeEffects) =>
+              runCommand(() => {
+                store.dispatch({ type: 'BATCH_SET_GROUP_EFFECTS', rootNodeId, effects });
+              })
+            }
+            onChangeGlobalShadowAngle={(angle) =>
+              runCommand(() => {
+                store.dispatch(
+                  { type: 'SET_GLOBAL_SHADOW_ANGLE', angle },
+                  { label: 'Global shadow angle', coalesceKey: 'global-shadow-angle' },
+                );
+              })
+            }
             onChangeCamera={(patch) => {
               const entries = Object.entries(patch) as Array<['x' | 'y' | 'zoom', number]>;
               if (entries.length === 1) {
@@ -1115,6 +1215,16 @@ export function App() {
           onSelectAsset={setActiveMaterialId}
           onCreateMaterial={handleCreateMaterial}
           onUpdateMaterial={handleUpdateMaterial}
+        />
+      )}
+
+      {showExportModal && (
+        <ExportModal
+          open={showExportModal}
+          project={project}
+          blobs={blobs}
+          currentTick={currentTick}
+          onClose={() => setShowExportModal(false)}
         />
       )}
 

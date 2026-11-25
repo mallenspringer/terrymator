@@ -265,6 +265,15 @@ export type Command =
       durationTicks?: number;
       defaultMotionRate?: RationalFps;
       workRange?: { inTick: number; outTick: number };
+    }
+  | {
+      type: 'SET_GLOBAL_SHADOW_ANGLE';
+      angle: number;
+    }
+  | {
+      type: 'BATCH_SET_GROUP_EFFECTS';
+      rootNodeId: string;
+      effects: NodeEffects;
     };
 
 function assertNoCycle(nodes: Record<string, SceneNode>, nodeId: string, parentId: string | null): void {
@@ -1013,6 +1022,21 @@ export function applyCommand(project: Project, command: Command): Project {
           throw new AppError('ERR_INVALID_RANGE', 'Invalid workRange bounds.');
         }
         next.shot.workRange = { ...command.workRange };
+      }
+      break;
+    }
+    case 'SET_GLOBAL_SHADOW_ANGLE': {
+      if (!Number.isFinite(command.angle)) {
+        throw new AppError('ERR_INVALID_COMMAND', 'globalShadowAngle must be finite.');
+      }
+      next.shot.globalShadowAngle = command.angle;
+      break;
+    }
+    case 'BATCH_SET_GROUP_EFFECTS': {
+      const parsed = NodeEffectsSchema.parse(command.effects);
+      const subtreeIds = collectSubtreeNodeIds(next, command.rootNodeId);
+      for (const id of subtreeIds) {
+        next.nodes[id]!.effects = structuredClone(parsed);
       }
       break;
     }
