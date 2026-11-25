@@ -1,6 +1,7 @@
 import { AppError } from './errors';
 import { validateTransform } from './math';
 import {
+  MaterialRecipeSchema,
   NodeEffectsSchema,
   NodeSchema,
   SourceSchema,
@@ -8,6 +9,7 @@ import {
   createBlankProject,
   defaultEffects,
   type Interpolation,
+  type MaterialRecipe,
   type NodeEffects,
   type Project,
   type SceneNode,
@@ -44,6 +46,29 @@ export type Command =
       assetId: string;
       sourceId: string;
       name: string;
+    }
+  | {
+      type: 'COMMIT_CUTOUT_EDIT';
+      assetId: string;
+      editRect: { x: number; y: number; width: number; height: number };
+      maskBlobId: string | null;
+      overlayBlobId: string | null;
+      anchorX: number;
+      anchorY: number;
+    }
+  | {
+      type: 'CREATE_MATERIAL_ASSET';
+      assetId: string;
+      name: string;
+      recipe: MaterialRecipe;
+      rasterBlobId: string;
+    }
+  | {
+      type: 'UPDATE_MATERIAL_ASSET';
+      assetId: string;
+      recipe: MaterialRecipe;
+      rasterBlobId: string;
+      name?: string;
     }
   | {
       type: 'RENAME_ASSET';
@@ -218,6 +243,71 @@ export function applyCommand(project: Project, command: Command): Project {
         anchorY: src.height / 2,
         revision: 1,
       };
+      break;
+    }
+    case 'COMMIT_CUTOUT_EDIT': {
+      const asset = next.assets[command.assetId];
+      if (!asset || asset.kind !== 'cutout') {
+        throw new AppError('ERR_MISSING_ASSET', `Cutout asset "${command.assetId}" does not exist.`);
+      }
+      if (command.editRect.width <= 0 || command.editRect.height <= 0) {
+        throw new AppError('ERR_INVALID_SCHEMA', 'editRect dimensions must be positive.');
+      }
+      asset.editRect = { ...command.editRect };
+      asset.maskBlobId = command.maskBlobId;
+      asset.overlayBlobId = command.overlayBlobId;
+      asset.width = command.editRect.width;
+      asset.height = command.editRect.height;
+      asset.anchorX = command.anchorX;
+      asset.anchorY = command.anchorY;
+      asset.revision += 1;
+      break;
+    }
+    case 'CREATE_MATERIAL_ASSET': {
+      if (next.assets[command.assetId]) {
+        throw new AppError('ERR_INVALID_COMMAND', `Asset "${command.assetId}" already exists.`);
+      }
+      const recipe = MaterialRecipeSchema.parse(command.recipe);
+      if (recipe.imageSourceId && !next.sources[recipe.imageSourceId]) {
+        throw new AppError(
+          'ERR_MISSING_ASSET',
+          `Material references missing source "${recipe.imageSourceId}".`,
+        );
+      }
+      next.assets[command.assetId] = {
+        id: command.assetId,
+        name: command.name.trim() || 'Material',
+        kind: 'material',
+        recipe,
+        rasterBlobId: command.rasterBlobId,
+        width: recipe.width,
+        height: recipe.height,
+        anchorX: recipe.width / 2,
+        anchorY: recipe.height / 2,
+        revision: 1,
+      };
+      break;
+    }
+    case 'UPDATE_MATERIAL_ASSET': {
+      const asset = next.assets[command.assetId];
+      if (!asset || asset.kind !== 'material') {
+        throw new AppError('ERR_MISSING_ASSET', `Material asset "${command.assetId}" does not exist.`);
+      }
+      const recipe = MaterialRecipeSchema.parse(command.recipe);
+      if (recipe.imageSourceId && !next.sources[recipe.imageSourceId]) {
+        throw new AppError(
+          'ERR_MISSING_ASSET',
+          `Material references missing source "${recipe.imageSourceId}".`,
+        );
+      }
+      if (command.name !== undefined && command.name.trim().length > 0) {
+        asset.name = command.name.trim();
+      }
+      asset.recipe = recipe;
+      asset.rasterBlobId = command.rasterBlobId;
+      asset.width = recipe.width;
+      asset.height = recipe.height;
+      asset.revision += 1;
       break;
     }
     case 'RENAME_ASSET': {

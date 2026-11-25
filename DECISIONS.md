@@ -44,3 +44,12 @@ All runtime and test dependencies are pinned to exact versions in `package.json`
 
 ### 9. Strict React 19 Hook Purity
 - `eslint-plugin-react-hooks@7.1.1` enforces `react-hooks/refs`; long-lived controller instances (`ProjectStore`, `PixiStageRenderer`, `RecoveryManager`) are initialized via `useState(() => ...)` lazy initializers rather than reading `useRef.current` during render.
+
+## 2026-11-25 — Gate G2
+
+### 10. Premultiplied Overlay Blending & Derived Cutout Cache
+- `blendPixelOver()` in `src/assets/cutting.ts` converts both destination and source pixels to premultiplied alpha before `source-over` compositing and converts back to straight RGBA, preventing dark fringes on transparent reconstruction overlays.
+- `ProjectStore.getBlobs()` lazily composites and caches `derived-cutout:${assetId}@${revision}` RGBA buffers for cutouts with masks, overlays, or extended `editRect`s, keeping `.collage` archives compact (storing only immutable source bytes + 8-bit mask PNG + overlay PNG).
+
+### 11. Deterministic Seeded Material Synthesis
+- `src/assets/materialSynthesis.ts` uses pure integer-hashed 2D value noise (`hash2D` + `valueNoise2D`) and `2x2` subpixel shape supersampling with `Math.random()` strictly banned, guaranteeing bit-for-bit identical rasters across Node and Browser for any given `MaterialRecipe`.

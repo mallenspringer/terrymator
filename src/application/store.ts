@@ -1,15 +1,30 @@
+import {
+  compositeCutoutAsset,
+  extractMaskFromRgba,
+  maskToPngBytes,
+  type EditRect,
+} from '../assets/cutting';
+import { synthesizeMaterial } from '../assets/materialSynthesis';
+import { encodePngRgba } from '../assets/pngCodec';
 import { applyCommand, type Command } from '../domain/commands';
 import { AppError } from '../domain/errors';
-import { evaluateScene, type EvaluateOptions, type EvaluatedScene } from '../domain/evaluator';
+import {
+  cutoutDerivedBlobKey,
+  evaluateScene,
+  type EvaluateOptions,
+  type EvaluatedScene,
+} from '../domain/evaluator';
 import { createId } from '../domain/ids';
 import {
   canonicalStringify,
   createBlankProject,
   validateProject,
+  type MaterialRecipe,
   type Project,
   type SourceMimeType,
   type SourceRecord,
 } from '../domain/schema';
+import { AsyncJobGuard } from './asyncJobs';
 import { BlobStore, collectProjectBlobIds, type BlobRecord } from './blobStore';
 import { UndoHistory, type HistoryStats } from './history';
 
@@ -43,7 +58,9 @@ export interface DispatchOptions {
 export class ProjectStore {
   private project: Project | null = null;
   private readonly blobStore = new BlobStore();
+  private readonly derivedCutouts = new Map<string, BlobRecord>();
   private readonly history = new UndoHistory();
+  public readonly asyncGuard = new AsyncJobGuard();
   private savedRevision = 1;
   private listeners = new Set<() => void>();
 
@@ -71,7 +88,9 @@ export class ProjectStore {
 
     this.project = structuredClone(validated);
     this.blobStore.load(blobs);
+    this.derivedCutouts.clear();
     this.history.clear();
+    this.asyncGuard.invalidateAll();
     this.savedRevision = validated.revision;
     this.pruneOrphanedBlobs();
     this.notify();
@@ -89,7 +108,66 @@ export class ProjectStore {
   }
 
   public getBlobs(): Map<string, BlobRecord> {
-    return this.blobStore.toMap();
+    const map = this.blobStore.toMap();
+    if (!this.project) {
+      return map;
+    }
+
+    const activeKeys = new Set<string>();
+    for (const asset of Object.values(this.project.assets)) {
+      if (asset.kind !== 'cutout') continue;
+      const source = this.project.sources[asset.sourceId];
+      if (!source) continue;
+      const needsComposite =
+        asset.maskBlobId !== null ||
+        asset.overlayBlobId !== null ||
+        asset.editRect.x !== 0 ||
+        asset.editRect.y !== 0 ||
+        asset.editRect.width !== source.width ||
+        asset.editRect.height !== source.height;
+      if (!needsComposite) continue;
+
+      const key = cutoutDerivedBlobKey(asset.id, asset.revision);
+      activeKeys.add(key);
+
+      let derived = this.derivedCutouts.get(key);
+      if (!derived) {
+        const srcBlob = this.blobStore.get(source.blobId);
+        if (!srcBlob) continue;
+        const maskBlob = asset.maskBlobId ? this.blobStore.get(asset.maskBlobId) : undefined;
+        const overlayBlob = asset.overlayBlobId ? this.blobStore.get(asset.overlayBlobId) : undefined;
+        const mask = maskBlob ? extractMaskFromRgba(maskBlob.rgba) : null;
+        const overlay = overlayBlob ? overlayBlob.rgba : null;
+        const rgba = compositeCutoutAsset(
+          srcBlob.rgba,
+          srcBlob.width,
+          srcBlob.height,
+          asset.editRect,
+          mask,
+          overlay,
+          true,
+        );
+        derived = {
+          id: key,
+          role: 'asset',
+          mimeType: 'image/png',
+          bytes: new Uint8Array(0),
+          sha256: '0'.repeat(64),
+          width: asset.editRect.width,
+          height: asset.editRect.height,
+          rgba,
+        };
+        this.derivedCutouts.set(key, derived);
+      }
+      map.set(key, derived);
+    }
+
+    for (const key of Array.from(this.derivedCutouts.keys())) {
+      if (!activeKeys.has(key)) {
+        this.derivedCutouts.delete(key);
+      }
+    }
+    return map;
   }
 
   public getBlobCount(): number {
@@ -205,11 +283,140 @@ export class ProjectStore {
     return this.history.stats();
   }
 
+  public async commitCutoutEdit(params: {
+    assetId: string;
+    editRect: EditRect;
+    mask: Uint8Array | null;
+    overlay: Uint8Array | null;
+    anchorX: number;
+    anchorY: number;
+    label?: string;
+  }): Promise<Project> {
+    if (!this.project) {
+      throw new AppError('ERR_RENDER_NOT_READY', 'No project loaded in store.');
+    }
+
+    let maskBlobId: string | null = null;
+    if (params.mask) {
+      const pngBytes = maskToPngBytes(params.mask, params.editRect.width, params.editRect.height);
+      const rgba = new Uint8Array(params.editRect.width * params.editRect.height * 4);
+      for (let i = 0; i < params.mask.length; i += 1) {
+        const b = i * 4;
+        rgba[b] = 255;
+        rgba[b + 1] = 255;
+        rgba[b + 2] = 255;
+        rgba[b + 3] = params.mask[i]!;
+      }
+      const rec = await this.blobStore.putImmutableBlob('mask', 'image/png', pngBytes, {
+        width: params.editRect.width,
+        height: params.editRect.height,
+        rgba,
+      });
+      maskBlobId = rec.id;
+    }
+
+    let overlayBlobId: string | null = null;
+    if (params.overlay) {
+      const pngBytes = encodePngRgba(params.overlay, params.editRect.width, params.editRect.height);
+      const rec = await this.blobStore.putImmutableBlob('overlay', 'image/png', pngBytes, {
+        width: params.editRect.width,
+        height: params.editRect.height,
+        rgba: params.overlay,
+      });
+      overlayBlobId = rec.id;
+    }
+
+    return this.dispatch(
+      {
+        type: 'COMMIT_CUTOUT_EDIT',
+        assetId: params.assetId,
+        editRect: params.editRect,
+        maskBlobId,
+        overlayBlobId,
+        anchorX: params.anchorX,
+        anchorY: params.anchorY,
+      },
+      { label: params.label ?? 'Edit Cutout' },
+    );
+  }
+
+  public async createMaterialAsset(params: {
+    assetId?: string;
+    name: string;
+    recipe: MaterialRecipe;
+  }): Promise<{ assetId: string; project: Project }> {
+    if (!this.project) {
+      throw new AppError('ERR_RENDER_NOT_READY', 'No project loaded in store.');
+    }
+    const sourceImage = this.resolveMaterialSourceImage(params.recipe.imageSourceId);
+    const synthesized = synthesizeMaterial(params.recipe, sourceImage);
+    const pngBytes = encodePngRgba(synthesized.rgba, synthesized.width, synthesized.height);
+    const rec = await this.blobStore.putImmutableBlob('asset', 'image/png', pngBytes, synthesized);
+    const assetId = params.assetId ?? createId('mat');
+
+    const project = this.dispatch(
+      {
+        type: 'CREATE_MATERIAL_ASSET',
+        assetId,
+        name: params.name,
+        recipe: params.recipe,
+        rasterBlobId: rec.id,
+      },
+      { label: `Create material ${params.name}` },
+    );
+    return { assetId, project };
+  }
+
+  public async updateMaterialAsset(params: {
+    assetId: string;
+    recipe: MaterialRecipe;
+    name?: string;
+    coalesceKey?: string;
+  }): Promise<Project> {
+    if (!this.project) {
+      throw new AppError('ERR_RENDER_NOT_READY', 'No project loaded in store.');
+    }
+    const sourceImage = this.resolveMaterialSourceImage(params.recipe.imageSourceId);
+    const synthesized = synthesizeMaterial(params.recipe, sourceImage);
+    const pngBytes = encodePngRgba(synthesized.rgba, synthesized.width, synthesized.height);
+    const rec = await this.blobStore.putImmutableBlob('asset', 'image/png', pngBytes, synthesized);
+
+    return this.dispatch(
+      {
+        type: 'UPDATE_MATERIAL_ASSET',
+        assetId: params.assetId,
+        recipe: params.recipe,
+        rasterBlobId: rec.id,
+        ...(params.name !== undefined ? { name: params.name } : {}),
+      },
+      {
+        label: 'Update Material',
+        ...(params.coalesceKey ? { coalesceKey: params.coalesceKey } : {}),
+      },
+    );
+  }
+
+  private resolveMaterialSourceImage(
+    imageSourceId: string | null,
+  ): { width: number; height: number; rgba: Uint8Array } | undefined {
+    if (!imageSourceId || !this.project) return undefined;
+    const src = this.project.sources[imageSourceId];
+    if (!src) {
+      throw new AppError('ERR_MISSING_ASSET', `Material source "${imageSourceId}" not found.`);
+    }
+    const blob = this.blobStore.get(src.blobId);
+    if (!blob) {
+      throw new AppError('ERR_MISSING_ASSET', `Source blob "${src.blobId}" not found.`);
+    }
+    return { width: blob.width, height: blob.height, rgba: blob.rgba };
+  }
+
   public undo(): Project | null {
     const prev = this.history.undo();
     if (!prev) {
       return null;
     }
+    this.asyncGuard.invalidateAll();
     this.project = prev;
     this.pruneOrphanedBlobs();
     this.notify();
@@ -221,6 +428,7 @@ export class ProjectStore {
     if (!next) {
       return null;
     }
+    this.asyncGuard.invalidateAll();
     this.project = next;
     this.pruneOrphanedBlobs();
     this.notify();

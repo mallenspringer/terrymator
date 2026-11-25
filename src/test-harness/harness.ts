@@ -1,11 +1,12 @@
 import type { HistoryStats } from '../application/history';
 import { ProjectStore, type ReplayLog, type ReplayReport } from '../application/store';
+import type { EditRect } from '../assets/cutting';
 import { decodeImageInBrowser } from '../assets/sourceImport';
 import type { Command } from '../domain/commands';
 import type { EvaluatedScene } from '../domain/evaluator';
 import { sha256Hex } from '../domain/hash';
 import { hitTestScene } from '../domain/hitTest';
-import type { Project, SourceRecord } from '../domain/schema';
+import type { MaterialRecipe, Project, SourceRecord } from '../domain/schema';
 import { probeExportCapabilities } from '../export/capabilities';
 import { exportProjectRange } from '../export/pipeline';
 import type { CapabilityReport, ExportOptions } from '../export/types';
@@ -50,6 +51,20 @@ export interface StudioHarness {
     bytes: number[],
     options?: { createInitialAsset?: boolean },
   ): Promise<{ source: SourceRecord; assetId?: string; deduplicated: boolean }>;
+  commitCutoutEdit(params: {
+    assetId: string;
+    editRect: EditRect;
+    mask: number[] | null;
+    overlay: number[] | null;
+    anchorX: number;
+    anchorY: number;
+  }): Promise<Project>;
+  createMaterialAsset(params: {
+    assetId?: string;
+    name: string;
+    recipe: MaterialRecipe;
+  }): Promise<{ assetId: string; project: Project }>;
+  updateMaterialAsset(params: { assetId: string; recipe: MaterialRecipe }): Promise<Project>;
   dispatch(command: Command): Promise<Project>;
   undo(): Promise<Project | null>;
   redo(): Promise<Project | null>;
@@ -112,6 +127,25 @@ export function createStudioHarness(): StudioHarness {
         rgba: decoded.rgba,
         createInitialAsset: options?.createInitialAsset ?? true,
       });
+    },
+
+    async commitCutoutEdit(params) {
+      return store.commitCutoutEdit({
+        assetId: params.assetId,
+        editRect: params.editRect,
+        mask: params.mask ? new Uint8Array(params.mask) : null,
+        overlay: params.overlay ? new Uint8Array(params.overlay) : null,
+        anchorX: params.anchorX,
+        anchorY: params.anchorY,
+      });
+    },
+
+    async createMaterialAsset(params) {
+      return store.createMaterialAsset(params);
+    },
+
+    async updateMaterialAsset(params) {
+      return store.updateMaterialAsset(params);
     },
 
     async dispatch(command: Command): Promise<Project> {

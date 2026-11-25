@@ -1,11 +1,28 @@
+import {
+  compositeCutoutAsset,
+  maskToPngBytes,
+  type EditRect,
+} from '../assets/cutting';
+import { synthesizeMaterial } from '../assets/materialSynthesis';
 import { encodePngRgba } from '../assets/pngCodec';
 import { createCutoutSprite, createSolidSquare, createTilePattern } from '../assets/synthetic';
 import { AppError } from '../domain/errors';
-import { defaultEffects, type Project } from '../domain/schema';
+import {
+  createBlankProject,
+  createDefaultMaterialRecipe,
+  defaultEffects,
+  type MaterialRecipe,
+  type Project,
+} from '../domain/schema';
 import { TICKS_PER_SECOND } from '../domain/time';
 import type { BlobRecord } from '../persistence/zip';
 
-export type FixtureId = 'G0_DEMO' | 'F09_EXPORT_CLOCK';
+export type FixtureId =
+  | 'G0_DEMO'
+  | 'F09_EXPORT_CLOCK'
+  | 'F02_HIDDEN_TORSO'
+  | 'F03_PAPER_RECIPE'
+  | 'F08_ARCHIVE';
 
 export interface LoadedFixture {
   project: Project;
@@ -441,12 +458,348 @@ export function buildF09ExportClockFixture(): LoadedFixture {
   return { project, blobs };
 }
 
+export function buildF01ColorIslands(): { width: number; height: number; rgba: Uint8Array } {
+  const width = 32;
+  const height = 32;
+  const rgba = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = (y * width + x) * 4;
+      // Outer 2px transparent margin
+      if (x < 2 || y < 2 || x >= width - 2 || y >= height - 2) {
+        continue;
+      }
+      // Anti-aliased border at x===2 or x===29
+      if (x === 2 || x === width - 3) {
+        rgba[idx] = 220;
+        rgba[idx + 1] = 40;
+        rgba[idx + 2] = 40;
+        rgba[idx + 3] = 128;
+        continue;
+      }
+      // Blue vertical separator in middle (x: 14..17)
+      if (x >= 14 && x <= 17) {
+        rgba[idx] = 30;
+        rgba[idx + 1] = 80;
+        rgba[idx + 2] = 220;
+        rgba[idx + 3] = 255;
+        continue;
+      }
+      // Left and right disconnected red islands
+      rgba[idx] = 220;
+      rgba[idx + 1] = 40;
+      rgba[idx + 2] = 40;
+      rgba[idx + 3] = 255;
+    }
+  }
+  return { width, height, rgba };
+}
+
+export function buildF02HiddenTorsoSheet(): { width: number; height: number; rgba: Uint8Array } {
+  const width = 64;
+  const height = 64;
+  const rgba = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = (y * width + x) * 4;
+      if (x < 4 || y < 4 || x >= 60 || y >= 60) {
+        continue;
+      }
+      // Green obscuring arm strip at x: 24..39
+      if (x >= 24 && x < 40 && y >= 10 && y < 54) {
+        rgba[idx] = 40;
+        rgba[idx + 1] = 190;
+        rgba[idx + 2] = 80;
+        rgba[idx + 3] = 255;
+        continue;
+      }
+      // Vertical orange/cream stripes on torso
+      const isOrange = Math.floor(x / 8) % 2 === 0;
+      rgba[idx] = isOrange ? 240 : 250;
+      rgba[idx + 1] = isOrange ? 120 : 240;
+      rgba[idx + 2] = isOrange ? 40 : 200;
+      rgba[idx + 3] = 255;
+    }
+  }
+  return { width, height, rgba };
+}
+
+export function buildF02HiddenTorso(): LoadedFixture {
+  const sheet = buildF02HiddenTorsoSheet();
+  const sheetBlob = makeBlob('blob-f02-sheet', sheet);
+  sheetBlob.role = 'source';
+
+  const project = createBlankProject({
+    id: 'proj-f02-torso',
+    name: 'F02 Hidden Torso',
+    width: 320,
+    height: 180,
+    background: { color: '#10141e', alpha: 0 },
+  });
+
+  project.sources['src-f02'] = {
+    id: 'src-f02',
+    name: 'f02-sheet.png',
+    blobId: sheetBlob.id,
+    sha256: sheetBlob.sha256,
+    mimeType: 'image/png',
+    width: 64,
+    height: 64,
+  };
+
+  project.assets['asset-torso'] = {
+    id: 'asset-torso',
+    name: 'Torso',
+    kind: 'cutout',
+    sourceId: 'src-f02',
+    editRect: { x: 0, y: 0, width: 64, height: 64 },
+    maskBlobId: null,
+    overlayBlobId: null,
+    width: 64,
+    height: 64,
+    anchorX: 32,
+    anchorY: 32,
+    revision: 1,
+  };
+
+  project.assets['asset-arm'] = {
+    id: 'asset-arm',
+    name: 'Arm',
+    kind: 'cutout',
+    sourceId: 'src-f02',
+    editRect: { x: 0, y: 0, width: 64, height: 64 },
+    maskBlobId: null,
+    overlayBlobId: null,
+    width: 64,
+    height: 64,
+    anchorX: 32,
+    anchorY: 32,
+    revision: 1,
+  };
+
+  project.nodes['node-torso'] = {
+    id: 'node-torso',
+    name: 'Torso',
+    kind: 'sprite',
+    parentId: null,
+    assetId: 'asset-torso',
+    transform: { x: 120, y: 90, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+    opacity: 1,
+    visible: true,
+    locked: false,
+    drawOrder: 10,
+    effects: defaultEffects(),
+  };
+
+  project.nodes['node-arm'] = {
+    id: 'node-arm',
+    name: 'Arm',
+    kind: 'sprite',
+    parentId: null,
+    assetId: 'asset-arm',
+    transform: { x: 120, y: 90, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+    opacity: 1,
+    visible: true,
+    locked: false,
+    drawOrder: 20,
+    effects: defaultEffects(),
+  };
+
+  return { project, blobs: new Map([[sheetBlob.id, sheetBlob]]) };
+}
+
+export function buildF03PaperRecipeData(): MaterialRecipe {
+  return createDefaultMaterialRecipe({
+    width: 128,
+    height: 128,
+    seed: 4242,
+    preset: 'construction-paper',
+    baseColor: '#d97757',
+    grainIntensity: 0.6,
+    edgeIrregularity: 0,
+    edgeDarkening: 0.3,
+    pattern: {
+      kind: 'stripes',
+      color: '#2b2d42',
+      opacity: 0.25,
+      scale: 12,
+    },
+    shapes: [
+      { id: 's1', kind: 'rect', op: 'union', x: 8, y: 8, width: 112, height: 112 },
+      { id: 's2', kind: 'ellipse', op: 'subtract', x: 44, y: 44, width: 40, height: 40 },
+      {
+        id: 's3',
+        kind: 'polygon',
+        op: 'union',
+        points: [
+          { x: 16, y: 16 },
+          { x: 36, y: 16 },
+          { x: 26, y: 36 },
+        ],
+      },
+    ],
+  });
+}
+
+export function buildF03PaperRecipe(): LoadedFixture {
+  const recipe = buildF03PaperRecipeData();
+  const synth = synthesizeMaterial(recipe);
+  const matBlob = makeBlob('blob-f03-mat', synth);
+
+  const project = createBlankProject({
+    id: 'proj-f03-paper',
+    name: 'F03 Paper Recipe',
+    width: 320,
+    height: 180,
+    background: { color: '#10141e', alpha: 0 },
+  });
+
+  project.assets['asset-paper'] = {
+    id: 'asset-paper',
+    name: 'Paper Cutout',
+    kind: 'material',
+    recipe,
+    rasterBlobId: matBlob.id,
+    width: recipe.width,
+    height: recipe.height,
+    anchorX: recipe.width / 2,
+    anchorY: recipe.height / 2,
+    revision: 1,
+  };
+
+  project.nodes['node-paper'] = {
+    id: 'node-paper',
+    name: 'Paper Node',
+    kind: 'sprite',
+    parentId: null,
+    assetId: 'asset-paper',
+    transform: { x: 160, y: 90, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+    opacity: 1,
+    visible: true,
+    locked: false,
+    drawOrder: 10,
+    effects: defaultEffects(),
+  };
+
+  return { project, blobs: new Map([[matBlob.id, matBlob]]) };
+}
+
+export function buildF08ArchiveProject(): LoadedFixture {
+  const base = buildF02HiddenTorso();
+  const sheetBlob = base.blobs.get('blob-f02-sheet')!;
+
+  // Add mask + overlay to asset-torso
+  const editRect: EditRect = { x: 0, y: 0, width: 64, height: 64 };
+  const mask = new Uint8Array(64 * 64).fill(255);
+  for (let y = 0; y < 64; y += 1) {
+    for (let x = 0; x < 4; x += 1) {
+      mask[y * 64 + x] = 0;
+    }
+  }
+  const maskPng = maskToPngBytes(mask, 64, 64);
+  const maskRgba = new Uint8Array(64 * 64 * 4);
+  for (let i = 0; i < 64 * 64; i += 1) {
+    maskRgba[i * 4] = 255;
+    maskRgba[i * 4 + 1] = 255;
+    maskRgba[i * 4 + 2] = 255;
+    maskRgba[i * 4 + 3] = mask[i]!;
+  }
+  const maskBlob: BlobRecord = {
+    id: 'blob-f08-mask',
+    role: 'mask',
+    mimeType: 'image/png',
+    bytes: maskPng,
+    sha256: '0'.repeat(64),
+    width: 64,
+    height: 64,
+    rgba: maskRgba,
+  };
+
+  const overlayRgba = compositeCutoutAsset(
+    createSolidSquare(64, 64, [240, 120, 40, 255]).rgba,
+    64,
+    64,
+    editRect,
+    null,
+    null,
+    false,
+  );
+  const overlayBlob = makeBlob('blob-f08-overlay', { width: 64, height: 64, rgba: overlayRgba });
+  overlayBlob.role = 'overlay';
+
+  const torso = base.project.assets['asset-torso']!;
+  if (torso.kind === 'cutout') {
+    torso.maskBlobId = maskBlob.id;
+    torso.overlayBlobId = overlayBlob.id;
+    torso.revision = 2;
+  }
+
+  // Unique sibling cutout sharing src-f02
+  base.project.assets['asset-torso-unique'] = {
+    id: 'asset-torso-unique',
+    name: 'Torso Unique',
+    kind: 'cutout',
+    sourceId: 'src-f02',
+    editRect: { x: 0, y: 0, width: 64, height: 64 },
+    maskBlobId: null,
+    overlayBlobId: null,
+    width: 64,
+    height: 64,
+    anchorX: 32,
+    anchorY: 32,
+    revision: 1,
+  };
+
+  // Seeded material asset
+  const recipe = buildF03PaperRecipeData();
+  const matSynth = synthesizeMaterial(recipe);
+  const matBlob = makeBlob('blob-f08-mat', matSynth);
+  base.project.assets['asset-f08-paper'] = {
+    id: 'asset-f08-paper',
+    name: 'F08 Paper',
+    kind: 'material',
+    recipe,
+    rasterBlobId: matBlob.id,
+    width: recipe.width,
+    height: recipe.height,
+    anchorX: recipe.width / 2,
+    anchorY: recipe.height / 2,
+    revision: 1,
+  };
+
+  base.project.nodes['node-paper'] = {
+    id: 'node-paper',
+    name: 'Paper Prop',
+    kind: 'sprite',
+    parentId: null,
+    assetId: 'asset-f08-paper',
+    transform: { x: 240, y: 90, angle: 0, sx: 1, sy: 1, pivotX: 0, pivotY: 0 },
+    opacity: 1,
+    visible: true,
+    locked: false,
+    drawOrder: 5,
+    effects: defaultEffects(),
+  };
+
+  base.blobs.set(sheetBlob.id, sheetBlob);
+  base.blobs.set(maskBlob.id, maskBlob);
+  base.blobs.set(overlayBlob.id, overlayBlob);
+  base.blobs.set(matBlob.id, matBlob);
+  return base;
+}
+
 export function loadFixtureById(id: string): LoadedFixture {
   switch (id) {
     case 'G0_DEMO':
       return buildG0DemoFixture();
     case 'F09_EXPORT_CLOCK':
       return buildF09ExportClockFixture();
+    case 'F02_HIDDEN_TORSO':
+      return buildF02HiddenTorso();
+    case 'F03_PAPER_RECIPE':
+      return buildF03PaperRecipe();
+    case 'F08_ARCHIVE':
+      return buildF08ArchiveProject();
     default:
       throw new AppError('ERR_UNKNOWN_FIXTURE', `Unknown fixture ID: "${id}".`);
   }

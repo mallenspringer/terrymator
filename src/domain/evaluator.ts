@@ -170,9 +170,23 @@ function topologicalOrder(nodes: Record<string, SceneNode>): SceneNode[] {
   return ordered;
 }
 
+export function cutoutDerivedBlobKey(assetId: string, revision: number): string {
+  return `derived-cutout:${assetId}@${revision}`;
+}
+
 function resolveAssetBlobId(project: Project, asset: Asset): string {
   if (asset.kind === 'synthetic-rgba') {
     return asset.blobId;
+  }
+  if (asset.kind === 'material') {
+    if (asset.recipe.imageSourceId && !project.sources[asset.recipe.imageSourceId]) {
+      throw new AppError(
+        'ERR_MISSING_ASSET',
+        `Material asset "${asset.id}" references missing source "${asset.recipe.imageSourceId}".`,
+        { assetId: asset.id, sourceId: asset.recipe.imageSourceId },
+      );
+    }
+    return asset.rasterBlobId;
   }
   const source = project.sources[asset.sourceId];
   if (!source) {
@@ -182,7 +196,14 @@ function resolveAssetBlobId(project: Project, asset: Asset): string {
       { assetId: asset.id, sourceId: asset.sourceId },
     );
   }
-  return source.blobId;
+  const needsComposite =
+    asset.maskBlobId !== null ||
+    asset.overlayBlobId !== null ||
+    asset.editRect.x !== 0 ||
+    asset.editRect.y !== 0 ||
+    asset.editRect.width !== source.width ||
+    asset.editRect.height !== source.height;
+  return needsComposite ? cutoutDerivedBlobKey(asset.id, asset.revision) : source.blobId;
 }
 
 export function evaluateScene(

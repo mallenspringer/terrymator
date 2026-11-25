@@ -22,6 +22,8 @@ export function collectProjectBlobIds(project: Project): Set<string> {
   for (const asset of Object.values(project.assets)) {
     if (asset.kind === 'synthetic-rgba') {
       ids.add(asset.blobId);
+    } else if (asset.kind === 'material') {
+      ids.add(asset.rasterBlobId);
     } else {
       if (asset.maskBlobId) ids.add(asset.maskBlobId);
       if (asset.overlayBlobId) ids.add(asset.overlayBlobId);
@@ -70,6 +72,32 @@ export class BlobStore {
     };
     this.map.set(id, record);
     return { record, deduplicated: false };
+  }
+
+  public async putImmutableBlob(
+    role: Exclude<BlobRole, 'source'>,
+    mimeType: string,
+    bytes: Uint8Array,
+    decoded: { width: number; height: number; rgba: Uint8Array },
+  ): Promise<BlobRecord> {
+    const sha256 = await sha256Hex(bytes);
+    const id = `${role}-${sha256.slice(0, 16)}`;
+    const existing = this.map.get(id);
+    if (existing && existing.sha256 === sha256) {
+      return existing;
+    }
+    const record: BlobRecord = {
+      id,
+      role,
+      mimeType,
+      bytes: new Uint8Array(bytes),
+      sha256,
+      width: decoded.width,
+      height: decoded.height,
+      rgba: new Uint8Array(decoded.rgba),
+    };
+    this.map.set(id, record);
+    return record;
   }
 
   public get(id: string): BlobRecord | undefined {

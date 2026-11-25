@@ -1,5 +1,6 @@
 import { useMemo, useRef, type ChangeEvent } from 'react';
 import type { BlobRecord } from '../application/blobStore';
+import { cutoutDerivedBlobKey } from '../domain/evaluator';
 import type { Asset, SourceRecord } from '../domain/schema';
 
 interface AssetLibraryPanelProps {
@@ -8,6 +9,8 @@ interface AssetLibraryPanelProps {
   blobs: Map<string, BlobRecord>;
   onImportFiles: (files: FileList) => void;
   onCreateCutoutFromSource: (sourceId: string) => void;
+  onCreateMaterial: () => void;
+  onEditAsset: (asset: Asset) => void;
   onUpdateSourceMeta: (sourceId: string, attribution: string, sourceUrl: string) => void;
   onAddAssetToStage: (assetId: string) => void;
   onDeleteAsset: (assetId: string) => void;
@@ -32,6 +35,8 @@ export function AssetLibraryPanel({
   blobs,
   onImportFiles,
   onCreateCutoutFromSource,
+  onCreateMaterial,
+  onEditAsset,
   onUpdateSourceMeta,
   onAddAssetToStage,
   onDeleteAsset,
@@ -41,13 +46,20 @@ export function AssetLibraryPanel({
   const thumbUrls = useMemo(() => {
     const map = new Map<string, string>();
     for (const asset of assets) {
-      const blobId =
-        asset.kind === 'synthetic-rgba'
-          ? asset.blobId
+      let blobId: string | undefined;
+      if (asset.kind === 'synthetic-rgba') {
+        blobId = asset.blobId;
+      } else if (asset.kind === 'material') {
+        blobId = asset.rasterBlobId;
+      } else {
+        const derivedKey = cutoutDerivedBlobKey(asset.id, asset.revision);
+        blobId = blobs.has(derivedKey)
+          ? derivedKey
           : sources.find((s) => s.id === asset.sourceId)?.blobId;
-      if (blobId && !map.has(blobId)) {
+      }
+      if (blobId && !map.has(asset.id)) {
         const url = rgbaToThumbDataUrl(blobs.get(blobId));
-        if (url) map.set(blobId, url);
+        if (url) map.set(asset.id, url);
       }
     }
     return map;
@@ -64,15 +76,25 @@ export function AssetLibraryPanel({
     <aside className="dock-panel" aria-label="Asset Library">
       <div className="panel-section">
         <div className="panel-heading">
-          <span>Asset Library</span>
-          <button
-            type="button"
-            className="studio-btn primary"
-            data-testid="import-image-btn"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            + Import Image
-          </button>
+          <span>Assets ({assets.length})</span>
+          <div className="row-wrap">
+            <button
+              type="button"
+              className="studio-btn primary"
+              data-testid="import-image-btn"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              + Image
+            </button>
+            <button
+              type="button"
+              className="studio-btn"
+              data-testid="new-material-btn"
+              onClick={onCreateMaterial}
+            >
+              + Material
+            </button>
+          </div>
           <input
             ref={fileInputRef}
             data-testid="import-image-input"
@@ -86,15 +108,11 @@ export function AssetLibraryPanel({
 
         {assets.length === 0 ? (
           <div style={{ color: '#6b778c', fontSize: 12 }}>
-            Import a PNG, JPEG, or WebP image to create assets.
+            Import a PNG/JPEG/WebP image or create a Material shape.
           </div>
         ) : (
           assets.map((asset) => {
-            const blobId =
-              asset.kind === 'synthetic-rgba'
-                ? asset.blobId
-                : sources.find((s) => s.id === asset.sourceId)?.blobId;
-            const thumb = blobId ? thumbUrls.get(blobId) : undefined;
+            const thumb = thumbUrls.get(asset.id);
             return (
               <div key={asset.id} className="card-item" data-testid={`asset-card-${asset.id}`}>
                 <div className="row-between">
@@ -103,12 +121,12 @@ export function AssetLibraryPanel({
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontWeight: 600, wordBreak: 'break-word' }}>{asset.name}</div>
                       <div style={{ fontSize: 11, color: '#8f9bb3' }}>
-                        {asset.width}×{asset.height} · rev {asset.revision}
+                        {asset.kind} · {asset.width}×{asset.height} · rev {asset.revision}
                       </div>
                     </div>
                   </div>
                 </div>
-                <div className="row-between">
+                <div className="row-wrap">
                   <button
                     type="button"
                     className="studio-btn"
@@ -117,6 +135,16 @@ export function AssetLibraryPanel({
                   >
                     Add to Stage
                   </button>
+                  {asset.kind !== 'synthetic-rgba' && (
+                    <button
+                      type="button"
+                      className="studio-btn"
+                      data-testid="edit-asset-btn"
+                      onClick={() => onEditAsset(asset)}
+                    >
+                      Edit
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="studio-btn danger"

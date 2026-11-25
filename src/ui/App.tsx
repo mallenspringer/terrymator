@@ -4,7 +4,15 @@ import { decodeImageInBrowser } from '../assets/sourceImport';
 import { createDefaultNode } from '../domain/commands';
 import { isAppError } from '../domain/errors';
 import { createId } from '../domain/ids';
-import { createBlankProject, type Project, type TransformType } from '../domain/schema';
+import {
+  createBlankProject,
+  createDefaultMaterialRecipe,
+  type CutoutAsset,
+  type MaterialAsset,
+  type MaterialRecipe,
+  type Project,
+  type TransformType,
+} from '../domain/schema';
 import { downloadBytes, readFileAsUint8Array } from '../persistence/fileIO';
 import {
   IndexedDbRecoveryStorage,
@@ -14,9 +22,13 @@ import {
 import { packArchive, unpackArchive } from '../persistence/zip';
 import { PixiStageRenderer, type EditorViewport } from '../render/pixiAdapter';
 import { AssetLibraryPanel } from './AssetLibraryPanel';
+import { CuttingRoomWorkspace } from './CuttingRoomWorkspace';
 import { LayersInspectorPanel } from './LayersInspectorPanel';
+import { MaterialWorkshopWorkspace } from './MaterialWorkshopWorkspace';
 import { StageViewport } from './StageViewport';
 import './styles.css';
+
+type WorkspaceMode = 'studio' | 'cutting' | 'material';
 
 export function App() {
   const [store] = useState(() => {
@@ -29,9 +41,12 @@ export function App() {
 
   const openInputRef = useRef<HTMLInputElement | null>(null);
 
+  const [workspace, setWorkspace] = useState<WorkspaceMode>('studio');
   const [project, setProject] = useState<Project>(() => store.snapshot());
   const [dirty, setDirty] = useState<boolean>(() => store.isDirty());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [activeCutoutId, setActiveCutoutId] = useState<string | null>(null);
+  const [activeMaterialId, setActiveMaterialId] = useState<string | null>(null);
   const [viewport, setViewport] = useState<EditorViewport>({ panX: 0, panY: 0, zoom: 1 });
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [recoveryInfo, setRecoveryInfo] = useState<RecoveryInfo | null>(null);
@@ -57,15 +72,12 @@ export function App() {
           setRecoveryInfo(info);
         }
       })
-      .catch(() => {
-        // IndexedDB unavailable; proceed without recovery banner
-      });
+      .catch(() => {});
     return () => {
       active = false;
     };
   }, [recovery]);
 
-  // Debounced crash-recovery snapshot after committed dirty edits
   useEffect(() => {
     if (!dirty) return;
     const timer = setTimeout(() => {
@@ -97,7 +109,6 @@ export function App() {
     }
   }, [store]);
 
-  // Keyboard shortcuts: Ctrl+Z, Ctrl+Y / Ctrl+Shift+Z, Ctrl+S
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -138,7 +149,7 @@ export function App() {
       try {
         const bytes = await readFileAsUint8Array(file);
         const decoded = await decodeImageInBrowser(bytes);
-        await store.importSource({
+        const res = await store.importSource({
           name: file.name,
           bytes,
           mimeType: decoded.mimeType,
@@ -147,9 +158,40 @@ export function App() {
           rgba: decoded.rgba,
           createInitialAsset: true,
         });
+        if (res.assetId) {
+          setActiveCutoutId(res.assetId);
+        }
       } catch (err) {
         setErrorMsg(isAppError(err) ? `${err.code}: ${err.message}` : String(err));
       }
+    }
+  };
+
+  const handleCreateMaterial = async () => {
+    try {
+      setErrorMsg(null);
+      const count = Object.values(project.assets).filter((a) => a.kind === 'material').length + 1;
+      const { assetId } = await store.createMaterialAsset({
+        name: `Paper Shape ${count}`,
+        recipe: createDefaultMaterialRecipe(),
+      });
+      setActiveMaterialId(assetId);
+      setWorkspace('material');
+    } catch (err) {
+      setErrorMsg(isAppError(err) ? `${err.code}: ${err.message}` : String(err));
+    }
+  };
+
+  const handleUpdateMaterial = async (assetId: string, recipe: MaterialRecipe) => {
+    try {
+      setErrorMsg(null);
+      await store.updateMaterialAsset({
+        assetId,
+        recipe,
+        coalesceKey: `mat-${assetId}`,
+      });
+    } catch (err) {
+      setErrorMsg(isAppError(err) ? `${err.code}: ${err.message}` : String(err));
     }
   };
 
@@ -190,6 +232,8 @@ export function App() {
       renderer.clearTextures();
       store.dispatch({ type: 'NEW_SHOT' });
       setSelectedNodeId(null);
+      setActiveCutoutId(null);
+      setActiveMaterialId(null);
       setViewport({ panX: 0, panY: 0, zoom: 1 });
       setErrorMsg(null);
     };
@@ -231,17 +275,48 @@ export function App() {
     [project, store],
   );
   const selectedNode = selectedNodeId ? (project.nodes[selectedNodeId] ?? null) : null;
+  const cutouts = useMemo(
+    () => Object.values(project.assets).filter((a): a is CutoutAsset => a.kind === 'cutout'),
+    [project.assets],
+  );
+  const materials = useMemo(
+    () => Object.values(project.assets).filter((a): a is MaterialAsset => a.kind === 'material'),
+    [project.assets],
+  );
 
   return (
     <div className="studio-shell">
       <header className="studio-toolbar">
         <span className="studio-title">Terrymator · {project.name}</span>
-        <span
-          className={dirty ? 'dirty-badge' : 'clean-badge'}
-          data-testid="dirty-indicator"
-        >
+        <span className={dirty ? 'dirty-badge' : 'clean-badge'} data-testid="dirty-indicator">
           {dirty ? 'Unsaved' : 'Saved'}
         </span>
+
+        <div className="toolbar-sep" />
+        <button
+          type="button"
+          className={`studio-btn${workspace === 'studio' ? ' primary' : ''}`}
+          data-testid="tab-studio"
+          onClick={() => setWorkspace('studio')}
+        >
+          Studio
+        </button>
+        <button
+          type="button"
+          className={`studio-btn${workspace === 'cutting' ? ' primary' : ''}`}
+          data-testid="tab-cutting"
+          onClick={() => setWorkspace('cutting')}
+        >
+          Cutting Room
+        </button>
+        <button
+          type="button"
+          className={`studio-btn${workspace === 'material' ? ' primary' : ''}`}
+          data-testid="tab-material"
+          onClick={() => setWorkspace('material')}
+        >
+          Material Workshop
+        </button>
 
         <div className="toolbar-sep" />
         <button type="button" className="studio-btn" data-testid="new-shot-btn" onClick={handleNewShot}>
@@ -292,35 +367,45 @@ export function App() {
           Redo
         </button>
 
-        <div className="toolbar-sep" />
-        <button
-          type="button"
-          className="studio-btn"
-          onClick={() =>
-            setViewport((v) => ({ ...v, zoom: Math.max(0.25, Number((v.zoom / 1.25).toFixed(2))) }))
-          }
-        >
-          Viewport -
-        </button>
-        <span data-testid="viewport-zoom-label" style={{ fontSize: 12, color: '#9aa6b8' }}>
-          {Math.round(viewport.zoom * 100)}%
-        </span>
-        <button
-          type="button"
-          className="studio-btn"
-          onClick={() =>
-            setViewport((v) => ({ ...v, zoom: Math.min(4, Number((v.zoom * 1.25).toFixed(2))) }))
-          }
-        >
-          Viewport +
-        </button>
-        <button
-          type="button"
-          className="studio-btn"
-          onClick={() => setViewport({ panX: 0, panY: 0, zoom: 1 })}
-        >
-          Reset View
-        </button>
+        {workspace === 'studio' && (
+          <>
+            <div className="toolbar-sep" />
+            <button
+              type="button"
+              className="studio-btn"
+              onClick={() =>
+                setViewport((v) => ({
+                  ...v,
+                  zoom: Math.max(0.25, Number((v.zoom / 1.25).toFixed(2))),
+                }))
+              }
+            >
+              Viewport -
+            </button>
+            <span data-testid="viewport-zoom-label" style={{ fontSize: 12, color: '#9aa6b8' }}>
+              {Math.round(viewport.zoom * 100)}%
+            </span>
+            <button
+              type="button"
+              className="studio-btn"
+              onClick={() =>
+                setViewport((v) => ({
+                  ...v,
+                  zoom: Math.min(4, Number((v.zoom * 1.25).toFixed(2))),
+                }))
+              }
+            >
+              Viewport +
+            </button>
+            <button
+              type="button"
+              className="studio-btn"
+              onClick={() => setViewport({ panX: 0, panY: 0, zoom: 1 })}
+            >
+              Reset View
+            </button>
+          </>
+        )}
       </header>
 
       {recoveryInfo && (
@@ -359,166 +444,210 @@ export function App() {
         </div>
       )}
 
-      <div className="studio-workspace">
-        <AssetLibraryPanel
-          sources={Object.values(project.sources)}
-          assets={Object.values(project.assets)}
-          blobs={blobs}
-          onImportFiles={(files) => void handleImportFiles(files)}
-          onCreateCutoutFromSource={(sourceId) =>
-            runCommand(() => {
-              const src = project.sources[sourceId];
-              if (!src) return;
-              store.dispatch({
-                type: 'CREATE_CUTOUT_ASSET',
-                assetId: createId('asset'),
-                sourceId,
-                name: `${src.name} Cutout`,
-              });
-            })
-          }
-          onUpdateSourceMeta={(sourceId, attribution, sourceUrl) =>
-            runCommand(() => {
-              store.dispatch(
-                { type: 'UPDATE_SOURCE_META', sourceId, attribution, sourceUrl },
-                { label: 'Update source metadata', coalesceKey: `meta-${sourceId}` },
-              );
-            })
-          }
-          onAddAssetToStage={(assetId) =>
-            runCommand(() => {
-              const asset = project.assets[assetId];
-              if (!asset) return;
-              const maxOrder = Object.values(project.nodes).reduce(
-                (max, n) => Math.max(max, n.drawOrder),
-                0,
-              );
-              const nodeId = createId('node');
-              store.dispatch({
-                type: 'ADD_NODE',
-                node: createDefaultNode({
-                  id: nodeId,
-                  name: asset.name,
-                  kind: 'sprite',
+      {workspace === 'studio' && (
+        <div className="studio-workspace">
+          <AssetLibraryPanel
+            sources={Object.values(project.sources)}
+            assets={Object.values(project.assets)}
+            blobs={blobs}
+            onImportFiles={(files) => void handleImportFiles(files)}
+            onCreateCutoutFromSource={(sourceId) =>
+              runCommand(() => {
+                const src = project.sources[sourceId];
+                if (!src) return;
+                const assetId = createId('asset');
+                store.dispatch({
+                  type: 'CREATE_CUTOUT_ASSET',
                   assetId,
-                  x: project.shot.width / 2,
-                  y: project.shot.height / 2,
-                  drawOrder: maxOrder + 1,
-                }),
-              });
-              setSelectedNodeId(nodeId);
-            })
-          }
-          onDeleteAsset={(assetId) =>
-            runCommand(() => {
-              store.dispatch({ type: 'DELETE_ASSET', assetId });
-            })
-          }
-        />
+                  sourceId,
+                  name: `${src.name} Cutout`,
+                });
+                setActiveCutoutId(assetId);
+              })
+            }
+            onCreateMaterial={() => void handleCreateMaterial()}
+            onEditAsset={(asset) => {
+              if (asset.kind === 'cutout') {
+                setActiveCutoutId(asset.id);
+                setWorkspace('cutting');
+              } else if (asset.kind === 'material') {
+                setActiveMaterialId(asset.id);
+                setWorkspace('material');
+              }
+            }}
+            onUpdateSourceMeta={(sourceId, attribution, sourceUrl) =>
+              runCommand(() => {
+                store.dispatch(
+                  { type: 'UPDATE_SOURCE_META', sourceId, attribution, sourceUrl },
+                  { label: 'Update source metadata', coalesceKey: `meta-${sourceId}` },
+                );
+              })
+            }
+            onAddAssetToStage={(assetId) =>
+              runCommand(() => {
+                const asset = project.assets[assetId];
+                if (!asset) return;
+                const maxOrder = Object.values(project.nodes).reduce(
+                  (max, n) => Math.max(max, n.drawOrder),
+                  0,
+                );
+                const nodeId = createId('node');
+                store.dispatch({
+                  type: 'ADD_NODE',
+                  node: createDefaultNode({
+                    id: nodeId,
+                    name: asset.name,
+                    kind: 'sprite',
+                    assetId,
+                    x: project.shot.width / 2,
+                    y: project.shot.height / 2,
+                    drawOrder: maxOrder + 1,
+                  }),
+                });
+                setSelectedNodeId(nodeId);
+              })
+            }
+            onDeleteAsset={(assetId) =>
+              runCommand(() => {
+                store.dispatch({ type: 'DELETE_ASSET', assetId });
+              })
+            }
+          />
 
-        <StageViewport
-          project={project}
-          scene={evaluatedScene}
+          <StageViewport
+            project={project}
+            scene={evaluatedScene}
+            blobs={blobs}
+            renderer={renderer}
+            viewport={viewport}
+            selectedNodeId={selectedNodeId}
+            onSelectNode={setSelectedNodeId}
+            onDragMoveNode={(nodeId, x, y, coalesceKey) =>
+              runCommand(() => {
+                store.dispatch(
+                  { type: 'SET_NODE_TRANSFORM', nodeId, transform: { x, y } },
+                  { label: 'Move layer', coalesceKey },
+                );
+              })
+            }
+            onViewportChange={setViewport}
+          />
+
+          <LayersInspectorPanel
+            nodes={Object.values(project.nodes)}
+            selectedNode={selectedNode}
+            onSelectNode={setSelectedNodeId}
+            onAddGroup={() =>
+              runCommand(() => {
+                const groupId = createId('group');
+                store.dispatch({
+                  type: 'ADD_NODE',
+                  node: createDefaultNode({
+                    id: groupId,
+                    name: 'Group',
+                    kind: 'group',
+                  }),
+                });
+                setSelectedNodeId(groupId);
+              })
+            }
+            onDuplicateNode={(nodeId) =>
+              runCommand(() => {
+                const newId = createId('node');
+                store.dispatch({
+                  type: 'DUPLICATE_NODE',
+                  sourceNodeId: nodeId,
+                  newNodeId: newId,
+                });
+                setSelectedNodeId(newId);
+              })
+            }
+            onMakeUnique={(nodeId) =>
+              runCommand(() => {
+                store.dispatch({
+                  type: 'MAKE_ASSET_UNIQUE',
+                  nodeId,
+                  newAssetId: createId('asset'),
+                });
+              })
+            }
+            onDeleteNode={(nodeId) =>
+              runCommand(() => {
+                store.dispatch({ type: 'DELETE_NODE', nodeId });
+                if (selectedNodeId === nodeId) setSelectedNodeId(null);
+              })
+            }
+            onToggleVisible={(nodeId, visible) =>
+              runCommand(() => {
+                store.dispatch({ type: 'SET_NODE_VISIBILITY', nodeId, visible });
+              })
+            }
+            onToggleLocked={(nodeId, locked) =>
+              runCommand(() => {
+                store.dispatch({ type: 'SET_NODE_LOCKED', nodeId, locked });
+              })
+            }
+            onChangeDrawOrder={(nodeId, drawOrder) =>
+              runCommand(() => {
+                store.dispatch({ type: 'SET_NODE_DRAW_ORDER', nodeId, drawOrder });
+              })
+            }
+            onChangeTransform={(nodeId, patch: Partial<TransformType>) =>
+              runCommand(() => {
+                store.dispatch({ type: 'SET_NODE_TRANSFORM', nodeId, transform: patch });
+              })
+            }
+            onChangeOpacity={(nodeId, opacity) =>
+              runCommand(() => {
+                store.dispatch({ type: 'SET_NODE_OPACITY', nodeId, opacity });
+              })
+            }
+            onChangeParent={(nodeId, parentId) =>
+              runCommand(() => {
+                store.dispatch({ type: 'SET_NODE_PARENT', nodeId, parentId });
+              })
+            }
+            onRenameNode={(nodeId, name) =>
+              runCommand(() => {
+                store.dispatch(
+                  { type: 'RENAME_NODE', nodeId, name },
+                  { label: 'Rename layer', coalesceKey: `rename-${nodeId}` },
+                );
+              })
+            }
+          />
+        </div>
+      )}
+
+      {workspace === 'cutting' && (
+        <CuttingRoomWorkspace
+          cutouts={cutouts}
+          sources={project.sources}
           blobs={blobs}
-          renderer={renderer}
-          viewport={viewport}
-          selectedNodeId={selectedNodeId}
-          onSelectNode={setSelectedNodeId}
-          onDragMoveNode={(nodeId, x, y, coalesceKey) =>
-            runCommand(() => {
-              store.dispatch(
-                { type: 'SET_NODE_TRANSFORM', nodeId, transform: { x, y } },
-                { label: 'Move layer', coalesceKey },
-              );
-            })
-          }
-          onViewportChange={setViewport}
+          activeAssetId={activeCutoutId}
+          onSelectAsset={setActiveCutoutId}
+          onCommitEdit={async (params) => {
+            try {
+              setErrorMsg(null);
+              await store.commitCutoutEdit(params);
+            } catch (err) {
+              setErrorMsg(isAppError(err) ? `${err.code}: ${err.message}` : String(err));
+            }
+          }}
         />
+      )}
 
-        <LayersInspectorPanel
-          nodes={Object.values(project.nodes)}
-          selectedNode={selectedNode}
-          onSelectNode={setSelectedNodeId}
-          onAddGroup={() =>
-            runCommand(() => {
-              const groupId = createId('group');
-              store.dispatch({
-                type: 'ADD_NODE',
-                node: createDefaultNode({
-                  id: groupId,
-                  name: 'Group',
-                  kind: 'group',
-                }),
-              });
-              setSelectedNodeId(groupId);
-            })
-          }
-          onDuplicateNode={(nodeId) =>
-            runCommand(() => {
-              const newId = createId('node');
-              store.dispatch({
-                type: 'DUPLICATE_NODE',
-                sourceNodeId: nodeId,
-                newNodeId: newId,
-              });
-              setSelectedNodeId(newId);
-            })
-          }
-          onMakeUnique={(nodeId) =>
-            runCommand(() => {
-              store.dispatch({
-                type: 'MAKE_ASSET_UNIQUE',
-                nodeId,
-                newAssetId: createId('asset'),
-              });
-            })
-          }
-          onDeleteNode={(nodeId) =>
-            runCommand(() => {
-              store.dispatch({ type: 'DELETE_NODE', nodeId });
-              if (selectedNodeId === nodeId) setSelectedNodeId(null);
-            })
-          }
-          onToggleVisible={(nodeId, visible) =>
-            runCommand(() => {
-              store.dispatch({ type: 'SET_NODE_VISIBILITY', nodeId, visible });
-            })
-          }
-          onToggleLocked={(nodeId, locked) =>
-            runCommand(() => {
-              store.dispatch({ type: 'SET_NODE_LOCKED', nodeId, locked });
-            })
-          }
-          onChangeDrawOrder={(nodeId, drawOrder) =>
-            runCommand(() => {
-              store.dispatch({ type: 'SET_NODE_DRAW_ORDER', nodeId, drawOrder });
-            })
-          }
-          onChangeTransform={(nodeId, patch: Partial<TransformType>) =>
-            runCommand(() => {
-              store.dispatch({ type: 'SET_NODE_TRANSFORM', nodeId, transform: patch });
-            })
-          }
-          onChangeOpacity={(nodeId, opacity) =>
-            runCommand(() => {
-              store.dispatch({ type: 'SET_NODE_OPACITY', nodeId, opacity });
-            })
-          }
-          onChangeParent={(nodeId, parentId) =>
-            runCommand(() => {
-              store.dispatch({ type: 'SET_NODE_PARENT', nodeId, parentId });
-            })
-          }
-          onRenameNode={(nodeId, name) =>
-            runCommand(() => {
-              store.dispatch(
-                { type: 'RENAME_NODE', nodeId, name },
-                { label: 'Rename layer', coalesceKey: `rename-${nodeId}` },
-              );
-            })
-          }
+      {workspace === 'material' && (
+        <MaterialWorkshopWorkspace
+          materials={materials}
+          sources={Object.values(project.sources)}
+          blobs={blobs}
+          activeAssetId={activeMaterialId}
+          onSelectAsset={setActiveMaterialId}
+          onCreateMaterial={handleCreateMaterial}
+          onUpdateMaterial={handleUpdateMaterial}
         />
-      </div>
+      )}
 
       {confirmState && (
         <div className="modal-backdrop" data-testid="confirm-dialog">

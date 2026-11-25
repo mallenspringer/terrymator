@@ -13,6 +13,9 @@ const forbiddenTokens = [
   'StudioHarness',
   'G0_DEMO',
   'F09_EXPORT_CLOCK',
+  'F02_HIDDEN_TORSO',
+  'F03_PAPER_RECIPE',
+  'F08_ARCHIVE',
 ];
 const allowedUrlPrefixes = [
   'http://www.w3.org/',

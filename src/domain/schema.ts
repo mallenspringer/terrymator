@@ -127,9 +127,95 @@ export const CutoutAssetSchema = z.object({
   revision: z.number().int().positive(),
 });
 
+export const MaterialShapeOpSchema = z.enum(['union', 'subtract', 'intersect']);
+
+export const MaterialShapeSchema = z.discriminatedUnion('kind', [
+  z.object({
+    id: z.string().min(1),
+    kind: z.literal('rect'),
+    op: MaterialShapeOpSchema,
+    x: finiteNumber,
+    y: finiteNumber,
+    width: finiteNumber.positive(),
+    height: finiteNumber.positive(),
+  }),
+  z.object({
+    id: z.string().min(1),
+    kind: z.literal('ellipse'),
+    op: MaterialShapeOpSchema,
+    x: finiteNumber,
+    y: finiteNumber,
+    width: finiteNumber.positive(),
+    height: finiteNumber.positive(),
+  }),
+  z.object({
+    id: z.string().min(1),
+    kind: z.literal('polygon'),
+    op: MaterialShapeOpSchema,
+    points: z.array(z.object({ x: finiteNumber, y: finiteNumber })).min(3),
+  }),
+]);
+
+export const MaterialPresetSchema = z.enum([
+  'construction-paper',
+  'kraft-cardboard',
+  'felt',
+  'aged-paper',
+  'fabric',
+  'halftone',
+]);
+
+export const MaterialPatternKindSchema = z.enum([
+  'none',
+  'stripes',
+  'dots',
+  'grid',
+  'checkerboard',
+  'crosshatch',
+]);
+
+export const MaterialPatternSchema = z.object({
+  kind: MaterialPatternKindSchema,
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  opacity: finiteNumber.min(0).max(1),
+  scale: finiteNumber.positive(),
+});
+
+export const MaterialRecipeSchema = z.object({
+  algorithmVersion: z.literal(1),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  seed: z.number().int(),
+  preset: MaterialPresetSchema,
+  baseColor: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  grainIntensity: finiteNumber.min(0).max(1),
+  textureScale: finiteNumber.positive(),
+  textureRotation: finiteNumber,
+  variation: finiteNumber.min(0).max(1),
+  edgeIrregularity: finiteNumber.min(0).max(1),
+  edgeDarkening: finiteNumber.min(0).max(1),
+  pattern: MaterialPatternSchema,
+  imageSourceId: z.string().min(1).nullable(),
+  shapes: z.array(MaterialShapeSchema).min(1),
+});
+
+export const MaterialAssetSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  kind: z.literal('material'),
+  recipe: MaterialRecipeSchema,
+  rasterBlobId: z.string().min(1),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  anchorX: finiteNumber,
+  anchorY: finiteNumber,
+  revision: z.number().int().positive(),
+});
+
 export const AssetSchema = z.discriminatedUnion('kind', [
   SyntheticAssetSchema,
   CutoutAssetSchema,
+  MaterialAssetSchema,
 ]);
 
 export const InterpolationSchema = z.enum(['hold', 'linear', 'smooth']);
@@ -210,7 +296,53 @@ export type SourceMimeType = z.infer<typeof SourceMimeTypeSchema>;
 export type SourceRecord = z.infer<typeof SourceSchema>;
 export type SyntheticAsset = z.infer<typeof SyntheticAssetSchema>;
 export type CutoutAsset = z.infer<typeof CutoutAssetSchema>;
+export type MaterialShapeOp = z.infer<typeof MaterialShapeOpSchema>;
+export type MaterialShape = z.infer<typeof MaterialShapeSchema>;
+export type MaterialPreset = z.infer<typeof MaterialPresetSchema>;
+export type MaterialPatternKind = z.infer<typeof MaterialPatternKindSchema>;
+export type MaterialPattern = z.infer<typeof MaterialPatternSchema>;
+export type MaterialRecipe = z.infer<typeof MaterialRecipeSchema>;
+export type MaterialAsset = z.infer<typeof MaterialAssetSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
+
+export function createDefaultMaterialRecipe(
+  overrides?: Partial<MaterialRecipe>,
+): MaterialRecipe {
+  const width = overrides?.width ?? 200;
+  const height = overrides?.height ?? 200;
+  return {
+    algorithmVersion: 1,
+    width,
+    height,
+    seed: overrides?.seed ?? 101,
+    preset: overrides?.preset ?? 'construction-paper',
+    baseColor: overrides?.baseColor ?? '#d97757',
+    grainIntensity: overrides?.grainIntensity ?? 0.55,
+    textureScale: overrides?.textureScale ?? 1,
+    textureRotation: overrides?.textureRotation ?? 0,
+    variation: overrides?.variation ?? 0.5,
+    edgeIrregularity: overrides?.edgeIrregularity ?? 0.2,
+    edgeDarkening: overrides?.edgeDarkening ?? 0.35,
+    pattern: overrides?.pattern ?? {
+      kind: 'none',
+      color: '#2b2d42',
+      opacity: 0.35,
+      scale: 16,
+    },
+    imageSourceId: overrides?.imageSourceId ?? null,
+    shapes: overrides?.shapes ?? [
+      {
+        id: 'shape-1',
+        kind: 'rect',
+        op: 'union',
+        x: 12,
+        y: 12,
+        width: width - 24,
+        height: height - 24,
+      },
+    ],
+  };
+}
 export type Interpolation = z.infer<typeof InterpolationSchema>;
 export type Key = z.infer<typeof KeySchema>;
 export type TrackProperty = z.infer<typeof TrackPropertySchema>;

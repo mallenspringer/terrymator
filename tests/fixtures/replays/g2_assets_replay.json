@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "F02_HIDDEN_TORSO",
+  "commands": [
+    {
+      "type": "COMMIT_CUTOUT_EDIT",
+      "assetId": "asset-torso",
+      "editRect": { "x": 0, "y": 0, "width": 64, "height": 64 },
+      "maskBlobId": null,
+      "overlayBlobId": null,
+      "anchorX": 32,
+      "anchorY": 32
+    },
+    {
+      "type": "SET_NODE_TRANSFORM",
+      "nodeId": "node-arm",
+      "transform": { "x": 180, "y": 90 }
+    },
+    {
+      "type": "MAKE_ASSET_UNIQUE",
+      "nodeId": "node-arm",
+      "newAssetId": "asset-arm-unique",
+      "newName": "Arm Unique"
+    }
+  ],
+  "checkpoints": [
+    {
+      "tick": 0,
+      "expectedDrawOrderNodeIds": ["node-torso", "node-arm"]
+    }
+  ]
+}
